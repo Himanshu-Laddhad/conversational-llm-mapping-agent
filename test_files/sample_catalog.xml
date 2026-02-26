@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ProductCatalog xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:noNamespaceSchemaLocation="catalog.xsd"
+               version="2.1"
+               generatedDate="2023-10-15"
+               supplier="ACME Supplies Inc">
+
+  <Metadata>
+    <CatalogID>CAT-2023-Q4</CatalogID>
+    <Currency>USD</Currency>
+    <PriceValidUntil>2023-12-31</PriceValidUntil>
+    <ContactEmail>sales@acmesupplies.com</ContactEmail>
+  </Metadata>
+
+  <Categories>
+    <Category id="CAT-001" name="Widgets"/>
+    <Category id="CAT-002" name="Fasteners"/>
+    <Category id="CAT-003" name="Motors &amp; Actuators"/>
+  </Categories>
+
+  <Products>
+    <Product sku="WIDGET-A100" categoryRef="CAT-001" active="true">
+      <Name>Heavy Duty Widget Model A100</Name>
+      <Description>Industrial grade widget suitable for high-torque applications. UV resistant casing.</Description>
+      <Color>Blue</Color>
+      <Dimensions unit="mm">
+        <Length>120</Length>
+        <Width>85</Width>
+        <Height>45</Height>
+        <Weight unit="kg">0.45</Weight>
+      </Dimensions>
+      <Pricing>
+        <UnitPrice>19.99</UnitPrice>
+        <BulkPrice minQty="100">16.99</BulkPrice>
+        <BulkPrice minQty="500">14.50</BulkPrice>
+      </Pricing>
+      <Stock>
+        <WarehouseID>WH-001</WarehouseID>
+        <QuantityOnHand>4250</QuantityOnHand>
+        <ReorderPoint>500</ReorderPoint>
+        <LeadTimeDays>3</LeadTimeDays>
+      </Stock>
+      <Compliance>
+        <RoHS>true</RoHS>
+        <CE>true</CE>
+        <UL>false</UL>
+      </Compliance>
+    </Product>
+
+    <Product sku="BOLT-M8X25" categoryRef="CAT-002" active="true">
+      <Name>M8 x 25mm Hex Bolt Zinc Plated</Name>
+      <Description>Grade 8.8 metric hex bolt, zinc plated for corrosion resistance. Pack of 100.</Description>
+      <Material>Carbon Steel</Material>
+      <Finish>Zinc Plated</Finish>
+      <Dimensions unit="mm">
+        <ThreadDiameter>8</ThreadDiameter>
+        <Length>25</Length>
+        <HeadType>Hex</HeadType>
+      </Dimensions>
+      <Pricing>
+        <UnitPrice>4.50</UnitPrice>
+        <BulkPrice minQty="500">3.80</BulkPrice>
+      </Pricing>
+      <Stock>
+        <WarehouseID>WH-001</WarehouseID>
+        <QuantityOnHand>92000</QuantityOnHand>
+        <ReorderPoint>10000</ReorderPoint>
+        <LeadTimeDays>1</LeadTimeDays>
+      </Stock>
+    </Product>
+
+    <Product sku="MOTOR-DC12V" categoryRef="CAT-003" active="true">
+      <Name>12V DC Brushless Motor 500RPM</Name>
+      <Description>High efficiency brushless DC motor rated at 500 RPM. Suitable for conveyor and automation systems.</Description>
+      <Specifications>
+        <Voltage unit="V">12</Voltage>
+        <CurrentDraw unit="A">2.5</CurrentDraw>
+        <RPM>500</RPM>
+        <Torque unit="Nm">0.8</Torque>
+        <Efficiency unit="percent">87</Efficiency>
+        <IPRating>IP54</IPRating>
+      </Specifications>
+      <Pricing>
+        <UnitPrice>149.99</UnitPrice>
+        <BulkPrice minQty="10">129.99</BulkPrice>
+      </Pricing>
+      <Stock>
+        <WarehouseID>WH-002</WarehouseID>
+        <QuantityOnHand>340</QuantityOnHand>
+        <ReorderPoint>50</ReorderPoint>
+        <LeadTimeDays>7</LeadTimeDays>
+      </Stock>
+      <Compliance>
+        <RoHS>true</RoHS>
+        <CE>true</CE>
+        <UL>true</UL>
+      </Compliance>
+    </Product>
+  </Products>
+
+</ProductCatalog>

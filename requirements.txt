@@ -1,0 +1,34 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# INDUSTRY PRACTICUM - PARTNERLINQ
+# Python Dependencies
+# ══════════════════════════════════════════════════════════════════════════════
+# Install with: pip install -r requirements.txt
+# Or in development mode: pip install -r requirements.txt --upgrade
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Core AI & LLM ─────────────────────────────────────────────────────────────
+# Groq SDK for LLM inference (intent scoring and conversational AI)
+groq~=1.0.0
+
+# Environment variable management (loads .env file for API keys)
+python-dotenv~=1.2.0
+
+# ── EDI & Data Format Parsing ─────────────────────────────────────────────────
+# EDIFACT (Electronic Data Interchange For Administration, Commerce and Transport)
+pydifact~=0.1.8
+
+# X12 EDI parsing (ANSI ASC X12 standard)
+pyx12~=2.3.0
+
+# XML/XSLT parsing and processing (lxml with XPath and XSLT support)
+lxml~=6.0.0
+
+# setuptools (required by pyx12 for pkg_resources)
+setuptools>=65.0.0
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Version Constraints Explanation:
+# ~= (compatible release): Allows patch-level changes (e.g., ~=1.0.0 allows 1.0.x)
+# >= (minimum version): Use when you need at least a specific version
+# == (exact version): Use only when absolutely necessary for compatibility
+# ══════════════════════════════════════════════════════════════════════════════

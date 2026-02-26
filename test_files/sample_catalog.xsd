@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://example.com/catalog"
+           xmlns:cat="http://example.com/catalog"
+           elementFormDefault="qualified"
+           version="2.1">
+
+  <!-- Root element -->
+  <xs:element name="ProductCatalog" type="cat:ProductCatalogType"/>
+
+  <!-- Product Catalog Type -->
+  <xs:complexType name="ProductCatalogType">
+    <xs:sequence>
+      <xs:element name="Metadata" type="cat:MetadataType"/>
+      <xs:element name="Categories" type="cat:CategoriesType"/>
+      <xs:element name="Products" type="cat:ProductsType"/>
+    </xs:sequence>
+    <xs:attribute name="version" type="xs:string" use="required"/>
+    <xs:attribute name="generatedDate" type="xs:date" use="required"/>
+    <xs:attribute name="supplier" type="xs:string" use="required"/>
+  </xs:complexType>
+
+  <!-- Metadata Type -->
+  <xs:complexType name="MetadataType">
+    <xs:sequence>
+      <xs:element name="CatalogName" type="xs:string"/>
+      <xs:element name="Description" type="xs:string"/>
+      <xs:element name="ValidFrom" type="xs:date"/>
+      <xs:element name="ValidUntil" type="xs:date"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Categories Type -->
+  <xs:complexType name="CategoriesType">
+    <xs:sequence>
+      <xs:element name="Category" type="cat:CategoryType" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Category Type -->
+  <xs:complexType name="CategoryType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="id" type="xs:string" use="required"/>
+        <xs:attribute name="name" type="xs:string" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+  <!-- Products Type -->
+  <xs:complexType name="ProductsType">
+    <xs:sequence>
+      <xs:element name="Product" type="cat:ProductType" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Product Type -->
+  <xs:complexType name="ProductType">
+    <xs:sequence>
+      <xs:element name="ProductID" type="cat:ProductIDType"/>
+      <xs:element name="Name" type="xs:string"/>
+      <xs:element name="Description" type="xs:string"/>
+      <xs:element name="Category" type="xs:string"/>
+      <xs:element name="Price" type="cat:PriceType"/>
+      <xs:element name="Currency" type="cat:CurrencyType"/>
+      <xs:element name="Availability" type="cat:AvailabilityType"/>
+      <xs:element name="Specifications" type="cat:SpecificationsType"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Product ID Type (Simple Type with Pattern) -->
+  <xs:simpleType name="ProductIDType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Z]{2,3}-[0-9]{3,5}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Price Type (Decimal with constraints) -->
+  <xs:simpleType name="PriceType">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0.01"/>
+      <xs:maxInclusive value="999999.99"/>
+      <xs:fractionDigits value="2"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Currency Type (Enumeration) -->
+  <xs:simpleType name="CurrencyType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="USD"/>
+      <xs:enumeration value="EUR"/>
+      <xs:enumeration value="GBP"/>
+      <xs:enumeration value="JPY"/>
+      <xs:enumeration value="CAD"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Availability Type -->
+  <xs:complexType name="AvailabilityType">
+    <xs:sequence>
+      <xs:element name="InStock" type="xs:boolean"/>
+      <xs:element name="Quantity" type="xs:nonNegativeInteger"/>
+      <xs:element name="LeadTimeDays" type="xs:nonNegativeInteger" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Specifications Type -->
+  <xs:complexType name="SpecificationsType">
+    <xs:sequence>
+      <xs:element name="Specification" type="cat:SpecificationType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Specification Type -->
+  <xs:complexType name="SpecificationType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="name" type="xs:string" use="required"/>
+        <xs:attribute name="unit" type="xs:string" use="optional"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+</xs:schema>
