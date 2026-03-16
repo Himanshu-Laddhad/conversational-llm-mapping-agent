@@ -10,6 +10,7 @@ Currently implemented:   explain  → groq_agent.explain()
                          simulate → simulation_engine.simulate()
                          modify   → modification_engine.modify()
                          generate → xslt_generator.generate()
+                         folder   → rag_engine.index_folder() + query_folder()
 
 Usage (as module):
     from modules.dispatcher import dispatch
@@ -179,6 +180,74 @@ def dispatch(
         "primary_response": primary_response,
         "agent":            agent,
         "ingested":         ingested,
+    }
+
+
+def dispatch_folder(
+    user_message: str,
+    folder_path: str,
+    persist_dir: str = ".rag_index",
+    force_reindex: bool = False,
+    top_k: int = 5,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+) -> dict:
+    """
+    Index a folder of mapping files (if not already indexed) and answer a
+    cross-file question using RAG.
+
+    This is the multi-file equivalent of dispatch(). It does not perform
+    single-file intent routing — it always uses the RAG engine.
+
+    Args:
+        user_message:   The user's question about the folder of mappings.
+        folder_path:    Path to folder containing mapping files to index/query.
+        persist_dir:    Directory where the ChromaDB index is persisted.
+        force_reindex:  If True, re-index all files even if already indexed.
+        top_k:          Number of chunks to retrieve from the index (default 5).
+        api_key:        Groq API key. Falls back to GROQ_API_KEY env var.
+        model:          Groq model. Falls back to GROQ_MODEL env var,
+                        then llama-3.3-70b-versatile.
+
+    Returns:
+        {
+          "responses":        {"rag": response_str}
+          "primary_response": response_str
+          "agent":            None  (RAG is stateless)
+          "ingested":         None  (multi-file, not a single ingested dict)
+          "index_result":     {"indexed": N, "skipped": M, "errors": [...]}
+        }
+
+    Raises:
+        ValueError: If user_message is empty, folder_path invalid, or no API key.
+    """
+    try:
+        from .rag_engine import index_folder, query_folder
+    except ImportError:
+        from rag_engine import index_folder, query_folder  # type: ignore
+
+    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+    index_result = index_folder(
+        folder_path=folder_path,
+        persist_dir=persist_dir,
+        force_reindex=force_reindex,
+    )
+
+    response, _ = query_folder(
+        question=user_message,
+        persist_dir=persist_dir,
+        top_k=top_k,
+        api_key=api_key,
+        model=resolved_model,
+    )
+
+    return {
+        "responses":        {"rag": response},
+        "primary_response": response,
+        "agent":            None,
+        "ingested":         None,
+        "index_result":     index_result,
     }
 
 

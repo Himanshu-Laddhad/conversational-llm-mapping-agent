@@ -20,6 +20,13 @@ pydifact~=0.1.8
 # XML/XSLT parsing and processing (lxml with XPath and XSLT support)
 lxml~=6.0.0
 
+# ── RAG / Multi-File Engine ────────────────────────────────────────────────────
+# Local persistent vector store — no server required
+chromadb>=0.6.0
+
+# Local sentence embedding model (all-MiniLM-L6-v2, ~80 MB) — no API key needed
+sentence-transformers>=3.0.0
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Version Constraints Explanation:
 # ~= (compatible release): Allows patch-level changes (e.g., ~=1.0.0 allows 1.0.x)
