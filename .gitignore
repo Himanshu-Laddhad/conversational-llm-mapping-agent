@@ -225,3 +225,8 @@ Pipfile.lock
 *.rdb
 celerybeat-schedule
 celerybeat.pid
+
+# ── MappingData ────────────────────────────────────────────────────────────────
+# Large sample/test data folder — kept locally but not tracked by git.
+# OneDrive holds file locks on these folders which breaks git checkout.
+MappingData/
