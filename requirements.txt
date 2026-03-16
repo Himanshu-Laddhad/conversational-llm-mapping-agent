@@ -17,14 +17,8 @@ python-dotenv~=1.2.0
 # EDIFACT (Electronic Data Interchange For Administration, Commerce and Transport)
 pydifact~=0.1.8
 
-# X12 EDI parsing (ANSI ASC X12 standard)
-pyx12~=2.3.0
-
 # XML/XSLT parsing and processing (lxml with XPath and XSLT support)
 lxml~=6.0.0
-
-# setuptools (required by pyx12 for pkg_resources)
-setuptools>=65.0.0
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Version Constraints Explanation:

@@ -21,14 +21,15 @@ class FileAgent:
     def __init__(
         self,
         groq_api_key: Optional[str] = None,
-        model: str = "llama-3.3-70b-versatile"
+        model: Optional[str] = None,
     ):
         """
         Initialize the FileAgent.
         
         Args:
             groq_api_key: Groq API key (loads from .env if not provided)
-            model: Groq model to use for chat completions
+            model: Groq model to use. Falls back to GROQ_MODEL env var,
+                   then to llama-3.1-8b-instant.
         """
         # Load environment variables
         load_dotenv()
@@ -42,7 +43,7 @@ class FileAgent:
         
         # Initialize Groq client
         self.client = Groq(api_key=api_key)
-        self.model = model
+        self.model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         
         # Initialize conversation state
         self.history = []
@@ -57,15 +58,41 @@ class FileAgent:
         
         Returns:
             Initial explanation string
+        
+        Raises:
+            TypeError: If ingested is not a dict.
+            ValueError: If ingested is missing required keys.
         """
+        if not isinstance(ingested, dict):
+            raise TypeError(
+                f"ingested must be a dict from ingest_file(), got {type(ingested).__name__}"
+            )
+        if "parsed_content" not in ingested:
+            raise ValueError(
+                "ingested dict is missing 'parsed_content' key — "
+                "pass the return value of ingest_file() directly"
+            )
+
         # Store metadata
         self.file_metadata = ingested.get("metadata", {})
         
         # Reset conversation history
         self.history = []
-        
-        # Serialize the full ingested dict to JSON
-        json_string = json.dumps(ingested, indent=2, ensure_ascii=False)
+
+        # Cap raw text fields before serializing to avoid exceeding LLM token limits.
+        # Large files (e.g. 900-line XSLTs) store full source in raw_xml / raw_text.
+        # 1 token ≈ 4 chars; capping at 20 000 chars keeps the prompt under ~6 000 tokens.
+        _MAX_RAW = 20_000
+        ingested_for_prompt = ingested.copy()
+        if isinstance(ingested_for_prompt.get("parsed_content"), dict):
+            pc = dict(ingested_for_prompt["parsed_content"])
+            for _field in ("raw_xml", "raw_text"):
+                if isinstance(pc.get(_field), str) and len(pc[_field]) > _MAX_RAW:
+                    pc[_field] = pc[_field][:_MAX_RAW] + f"\n... [truncated — {len(pc[_field])} total chars]"
+            ingested_for_prompt["parsed_content"] = pc
+
+        # Serialize the (possibly truncated) ingested dict to JSON
+        json_string = json.dumps(ingested_for_prompt, indent=2, ensure_ascii=False)
         
         # Extract metadata for system message
         file_type = self.file_metadata.get("file_type", "unknown")
@@ -89,6 +116,17 @@ The raw text content is included in the parsed_file JSON for your reference."""
         system_content += """
 
 When first responding, explain this file clearly in plain English: what type it is, what standard it follows, what its overall purpose appears to be, and a breakdown of each major section or segment with its meaning and notable values. Be specific about segment IDs, element values, and structure where relevant."""
+
+        if file_type == "XSLT":
+            system_content += """
+
+Because this is an XSLT mapping stylesheet, structure your explanation to cover ALL of the following:
+1. TRANSFORMATION SUMMARY — one sentence describing what this stylesheet converts (input format → output format).
+2. INPUT SCHEMA — what XML structure the stylesheet expects (root element, key child elements, namespaces).
+3. OUTPUT SCHEMA — what XML/JSON structure is produced (root element, key output fields).
+4. FIELD MAPPING TABLE — a plain-text table of source XPath expressions mapped to their output field names.
+5. HARDCODED VALUES — list every literal constant embedded in the stylesheet (e.g. account numbers, currency codes, language IDs) and explain what each represents in the business context.
+6. CONDITIONAL / BUSINESS LOGIC — any if/choose/when rules, value translations (e.g. BEG02 codes → order type labels), or grouping logic."""
         
         # Add system message
         self.history.append({
@@ -111,12 +149,15 @@ When first responding, explain this file clearly in plain English: what type it 
         
         Args:
             user_message: User's message
-            stream: If True, return streaming generator; if False, return full response
+            stream: If True, return a generator that yields raw Groq chunks and
+                    automatically appends the full assembled reply to history once
+                    the stream is exhausted. If False, return full response string.
         
         Returns:
             If stream=False: response string
-            If stream=True: generator yielding response chunks (caller must call
-                           append_assistant_message after consuming stream)
+            If stream=True: generator yielding Groq stream chunks; history is
+                            updated automatically — no need to call
+                            append_assistant_message() after consuming the stream.
         """
         # Append user message to history
         self.history.append({
@@ -132,8 +173,17 @@ When first responding, explain this file clearly in plain English: what type it 
         )
         
         if stream:
-            # Return generator for streaming
-            return completion
+            def _stream_and_record():
+                chunks = []
+                for chunk in completion:
+                    text = chunk.choices[0].delta.content or ""
+                    chunks.append(text)
+                    yield chunk
+                self.history.append({
+                    "role": "assistant",
+                    "content": "".join(chunks)
+                })
+            return _stream_and_record()
         else:
             # Extract full response
             response = completion.choices[0].message.content
@@ -150,7 +200,10 @@ When first responding, explain this file clearly in plain English: what type it 
         """
         Manually append an assistant message to history.
         
-        Use this after consuming a streaming response to persist it to history.
+        Useful when injecting assistant text that was generated outside of
+        chat() (e.g. a pre-canned reply or text from another LLM call).
+        Streaming responses via chat(stream=True) are recorded automatically
+        and do not require this method.
         
         Args:
             text: Full assistant response text

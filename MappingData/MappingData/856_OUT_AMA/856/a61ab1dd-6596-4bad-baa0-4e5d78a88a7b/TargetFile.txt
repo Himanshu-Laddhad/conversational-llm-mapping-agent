@@ -1,0 +1,598 @@
+<X12_00501_856 d1p1:noNamespaceSchemaLocation="file:///D:/Projects/Wilson1/Mapforce/Amazon%20USA/856/X12_00501_856.xsd" xml:space="preserve" ID="1" xmlns:d1p1="http://www.w3.org/2001/XMLSchema-instance">
+  <ISA ID="2" SegmentPosition="00">
+    <ISA01 ID="00:3">00</ISA01>
+    <ISA02 ID="00:4">          </ISA02>
+    <ISA03 ID="00:5">00</ISA03>
+    <ISA04 ID="00:6">          </ISA04>
+    <ISA05 ID="00:7">12</ISA05>
+    <ISA06 ID="00:8">4356735021     </ISA06>
+    <ISA07 ID="00:9">ZZ</ISA07>
+    <ISA08 ID="00:10">AMAZON         </ISA08>
+    <ISA09 ID="00:11">260304</ISA09>
+    <ISA10 ID="00:12">1629</ISA10>
+    <ISA11 ID="00:13">U</ISA11>
+    <ISA12 ID="00:14">00501</ISA12>
+    <ISA13 ID="00:15">495512433</ISA13>
+    <ISA14 ID="00:16">1</ISA14>
+    <ISA15 ID="00:17">P</ISA15>
+    <ISA16 ID="00:18">&gt;</ISA16>
+  </ISA>
+  <GS ID="19" SegmentPosition="00">
+    <GS01 ID="00:20">SH</GS01>
+    <GS02 ID="00:21">3039565790</GS02>
+    <GS03 ID="00:22">8028623330</GS03>
+    <GS04 ID="00:23">20260304</GS04>
+    <GS05 ID="00:24">162926</GS05>
+    <GS06 ID="00:25">9467</GS06>
+    <GS07 ID="00:26">X</GS07>
+    <GS08 ID="00:27">005010</GS08>
+  </GS>
+  <ST ID="28" SegmentPosition="00">
+    <ST01 ID="00:29">856</ST01>
+    <ST02 ID="00:30">0001</ST02>
+  </ST>
+  <BSN ID="31" SegmentPosition="00">
+    <BSN01 ID="00:32">00</BSN01>
+    <BSN02 ID="00:33">WHSHP-218795</BSN02>
+    <BSN03 ID="00:34">20260304</BSN03>
+    <BSN04 ID="00:35">212703</BSN04>
+    <BSN05 ID="00:36">0001</BSN05>
+  </BSN>
+  <HLLoop1 ID="37" SegmentPosition="00">
+    <HL ID="38" SegmentPosition="00">
+      <HL01 ID="00:39">1</HL01>
+      <HL02 ID="00:40" />
+      <HL03 ID="00:41">S</HL03>
+    </HL>
+    <TD1 ID="42" SegmentPosition="00">
+      <TD101 ID="00:43">CTN</TD101>
+      <TD102 ID="00:44">55</TD102>
+      <TD103 ID="00:45" />
+      <TD104 ID="00:46" />
+      <TD105 ID="00:47" />
+      <TD106 ID="00:48">G</TD106>
+      <TD107 ID="00:49">101.958</TD107>
+      <TD108 ID="00:50">LB</TD108>
+    </TD1>
+    <TD5 ID="51" SegmentPosition="00">
+      <TD501 ID="00:52" />
+      <TD502 ID="00:53">2</TD502>
+      <TD503 ID="00:54">UPS</TD503>
+    </TD5>
+    <REF ID="55" SegmentPosition="00">
+      <REF01 ID="00:56">BM</REF01>
+      <REF02 ID="00:57">1ZE844690392421960</REF02>
+    </REF>
+    <REF ID="58" SegmentPosition="00">
+      <REF01 ID="00:59">CN</REF01>
+      <REF02 ID="00:60">1ZE844690392421960</REF02>
+    </REF>
+    <DTM_2 ID="61" SegmentPosition="00">
+      <DTM01 ID="00:62">011</DTM01>
+      <DTM02 ID="00:63">20260304</DTM02>
+    </DTM_2>
+    <DTM_2 ID="64" SegmentPosition="00">
+      <DTM01 ID="00:65">017</DTM01>
+      <DTM02 ID="00:66">20260304</DTM02>
+    </DTM_2>
+    <N1Loop1 ID="67" SegmentPosition="00">
+      <N1 ID="68" SegmentPosition="00">
+        <N101 ID="00:69">SF</N101>
+        <N102 ID="00:70">Wilson Electronics</N102>
+        <N103 ID="00:71">ZZ</N103>
+        <N104 ID="00:72">000</N104>
+      </N1>
+      <N3 ID="73" SegmentPosition="00">
+        <N301 ID="00:74">1444 E Venture Dr</N301>
+      </N3>
+      <N4 ID="75" SegmentPosition="00">
+        <N401 ID="00:76">Saint George</N401>
+        <N402 ID="00:77">UT</N402>
+        <N403 ID="00:78">84790</N403>
+        <N404 ID="00:79">US</N404>
+      </N4>
+    </N1Loop1>
+    <N1Loop1 ID="80" SegmentPosition="00">
+      <N1 ID="81" SegmentPosition="00">
+        <N101 ID="00:82">ST</N101>
+        <N102 ID="00:83" />
+        <N103 ID="00:84">15</N103>
+        <N104 ID="00:85">9925503</N104>
+      </N1>
+    </N1Loop1>
+  </HLLoop1>
+  <HLLoop1 ID="86" SegmentPosition="00">
+    <HL ID="87" SegmentPosition="00">
+      <HL01 ID="00:88">2</HL01>
+      <HL02 ID="00:89">1</HL02>
+      <HL03 ID="00:90">O</HL03>
+    </HL>
+    <PRF ID="91" SegmentPosition="00">
+      <PRF01 ID="00:92">7TMQMRNK</PRF01>
+    </PRF>
+  </HLLoop1>
+  <HLLoop1 ID="93" SegmentPosition="00">
+    <HL ID="94" SegmentPosition="00">
+      <HL01 ID="00:95">3</HL01>
+      <HL02 ID="00:96">2</HL02>
+      <HL03 ID="00:97">P</HL03>
+    </HL>
+    <REF ID="98" SegmentPosition="00">
+      <REF01 ID="00:99">CN</REF01>
+      <REF02 ID="00:100">00008100059602657179</REF02>
+    </REF>
+    <MAN ID="101" SegmentPosition="00">
+      <MAN01 ID="00:102">GM</MAN01>
+      <MAN02 ID="00:103">00008100059602657179</MAN02>
+    </MAN>
+  </HLLoop1>
+  <HLLoop1 ID="104" SegmentPosition="00">
+    <HL ID="105" SegmentPosition="00">
+      <HL01 ID="00:106">4</HL01>
+      <HL02 ID="00:107">3</HL02>
+      <HL03 ID="00:108">I</HL03>
+    </HL>
+    <LIN ID="109" SegmentPosition="00">
+      <LIN01 ID="00:110">7</LIN01>
+      <LIN02 ID="00:111">VN</LIN02>
+      <LIN03 ID="00:112">471082</LIN03>
+    </LIN>
+    <SN1 ID="113" SegmentPosition="00">
+      <SN101 ID="00:114">7</SN101>
+      <SN102 ID="00:115">1</SN102>
+      <SN103 ID="00:116">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="117" SegmentPosition="00">
+    <HL ID="118" SegmentPosition="00">
+      <HL01 ID="00:119">5</HL01>
+      <HL02 ID="00:120">3</HL02>
+      <HL03 ID="00:121">I</HL03>
+    </HL>
+    <LIN ID="122" SegmentPosition="00">
+      <LIN01 ID="00:123">7</LIN01>
+      <LIN02 ID="00:124">VN</LIN02>
+      <LIN03 ID="00:125">471082</LIN03>
+    </LIN>
+    <SN1 ID="126" SegmentPosition="00">
+      <SN101 ID="00:127">7</SN101>
+      <SN102 ID="00:128">1</SN102>
+      <SN103 ID="00:129">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="130" SegmentPosition="00">
+    <HL ID="131" SegmentPosition="00">
+      <HL01 ID="00:132">6</HL01>
+      <HL02 ID="00:133">3</HL02>
+      <HL03 ID="00:134">I</HL03>
+    </HL>
+    <LIN ID="135" SegmentPosition="00">
+      <LIN01 ID="00:136">7</LIN01>
+      <LIN02 ID="00:137">VN</LIN02>
+      <LIN03 ID="00:138">471082</LIN03>
+    </LIN>
+    <SN1 ID="139" SegmentPosition="00">
+      <SN101 ID="00:140">7</SN101>
+      <SN102 ID="00:141">1</SN102>
+      <SN103 ID="00:142">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="143" SegmentPosition="00">
+    <HL ID="144" SegmentPosition="00">
+      <HL01 ID="00:145">7</HL01>
+      <HL02 ID="00:146">3</HL02>
+      <HL03 ID="00:147">I</HL03>
+    </HL>
+    <LIN ID="148" SegmentPosition="00">
+      <LIN01 ID="00:149">7</LIN01>
+      <LIN02 ID="00:150">VN</LIN02>
+      <LIN03 ID="00:151">471082</LIN03>
+    </LIN>
+    <SN1 ID="152" SegmentPosition="00">
+      <SN101 ID="00:153">7</SN101>
+      <SN102 ID="00:154">1</SN102>
+      <SN103 ID="00:155">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="156" SegmentPosition="00">
+    <HL ID="157" SegmentPosition="00">
+      <HL01 ID="00:158">8</HL01>
+      <HL02 ID="00:159">3</HL02>
+      <HL03 ID="00:160">I</HL03>
+    </HL>
+    <LIN ID="161" SegmentPosition="00">
+      <LIN01 ID="00:162">7</LIN01>
+      <LIN02 ID="00:163">VN</LIN02>
+      <LIN03 ID="00:164">471082</LIN03>
+    </LIN>
+    <SN1 ID="165" SegmentPosition="00">
+      <SN101 ID="00:166">7</SN101>
+      <SN102 ID="00:167">1</SN102>
+      <SN103 ID="00:168">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="169" SegmentPosition="00">
+    <HL ID="170" SegmentPosition="00">
+      <HL01 ID="00:171">9</HL01>
+      <HL02 ID="00:172">3</HL02>
+      <HL03 ID="00:173">I</HL03>
+    </HL>
+    <LIN ID="174" SegmentPosition="00">
+      <LIN01 ID="00:175">7</LIN01>
+      <LIN02 ID="00:176">VN</LIN02>
+      <LIN03 ID="00:177">471082</LIN03>
+    </LIN>
+    <SN1 ID="178" SegmentPosition="00">
+      <SN101 ID="00:179">7</SN101>
+      <SN102 ID="00:180">1</SN102>
+      <SN103 ID="00:181">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="182" SegmentPosition="00">
+    <HL ID="183" SegmentPosition="00">
+      <HL01 ID="00:184">10</HL01>
+      <HL02 ID="00:185">3</HL02>
+      <HL03 ID="00:186">I</HL03>
+    </HL>
+    <LIN ID="187" SegmentPosition="00">
+      <LIN01 ID="00:188">7</LIN01>
+      <LIN02 ID="00:189">VN</LIN02>
+      <LIN03 ID="00:190">471082</LIN03>
+    </LIN>
+    <SN1 ID="191" SegmentPosition="00">
+      <SN101 ID="00:192">7</SN101>
+      <SN102 ID="00:193">1</SN102>
+      <SN103 ID="00:194">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="195" SegmentPosition="00">
+    <HL ID="196" SegmentPosition="00">
+      <HL01 ID="00:197">11</HL01>
+      <HL02 ID="00:198">3</HL02>
+      <HL03 ID="00:199">I</HL03>
+    </HL>
+    <LIN ID="200" SegmentPosition="00">
+      <LIN01 ID="00:201">7</LIN01>
+      <LIN02 ID="00:202">VN</LIN02>
+      <LIN03 ID="00:203">471082</LIN03>
+    </LIN>
+    <SN1 ID="204" SegmentPosition="00">
+      <SN101 ID="00:205">7</SN101>
+      <SN102 ID="00:206">1</SN102>
+      <SN103 ID="00:207">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="208" SegmentPosition="00">
+    <HL ID="209" SegmentPosition="00">
+      <HL01 ID="00:210">12</HL01>
+      <HL02 ID="00:211">3</HL02>
+      <HL03 ID="00:212">I</HL03>
+    </HL>
+    <LIN ID="213" SegmentPosition="00">
+      <LIN01 ID="00:214">7</LIN01>
+      <LIN02 ID="00:215">VN</LIN02>
+      <LIN03 ID="00:216">471082</LIN03>
+    </LIN>
+    <SN1 ID="217" SegmentPosition="00">
+      <SN101 ID="00:218">7</SN101>
+      <SN102 ID="00:219">1</SN102>
+      <SN103 ID="00:220">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="221" SegmentPosition="00">
+    <HL ID="222" SegmentPosition="00">
+      <HL01 ID="00:223">13</HL01>
+      <HL02 ID="00:224">3</HL02>
+      <HL03 ID="00:225">I</HL03>
+    </HL>
+    <LIN ID="226" SegmentPosition="00">
+      <LIN01 ID="00:227">7</LIN01>
+      <LIN02 ID="00:228">VN</LIN02>
+      <LIN03 ID="00:229">471082</LIN03>
+    </LIN>
+    <SN1 ID="230" SegmentPosition="00">
+      <SN101 ID="00:231">7</SN101>
+      <SN102 ID="00:232">1</SN102>
+      <SN103 ID="00:233">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="234" SegmentPosition="00">
+    <HL ID="235" SegmentPosition="00">
+      <HL01 ID="00:236">14</HL01>
+      <HL02 ID="00:237">3</HL02>
+      <HL03 ID="00:238">I</HL03>
+    </HL>
+    <LIN ID="239" SegmentPosition="00">
+      <LIN01 ID="00:240">7</LIN01>
+      <LIN02 ID="00:241">VN</LIN02>
+      <LIN03 ID="00:242">471082</LIN03>
+    </LIN>
+    <SN1 ID="243" SegmentPosition="00">
+      <SN101 ID="00:244">7</SN101>
+      <SN102 ID="00:245">1</SN102>
+      <SN103 ID="00:246">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="247" SegmentPosition="00">
+    <HL ID="248" SegmentPosition="00">
+      <HL01 ID="00:249">15</HL01>
+      <HL02 ID="00:250">3</HL02>
+      <HL03 ID="00:251">I</HL03>
+    </HL>
+    <LIN ID="252" SegmentPosition="00">
+      <LIN01 ID="00:253">7</LIN01>
+      <LIN02 ID="00:254">VN</LIN02>
+      <LIN03 ID="00:255">471082</LIN03>
+    </LIN>
+    <SN1 ID="256" SegmentPosition="00">
+      <SN101 ID="00:257">7</SN101>
+      <SN102 ID="00:258">1</SN102>
+      <SN103 ID="00:259">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="260" SegmentPosition="00">
+    <HL ID="261" SegmentPosition="00">
+      <HL01 ID="00:262">16</HL01>
+      <HL02 ID="00:263">3</HL02>
+      <HL03 ID="00:264">I</HL03>
+    </HL>
+    <LIN ID="265" SegmentPosition="00">
+      <LIN01 ID="00:266">7</LIN01>
+      <LIN02 ID="00:267">VN</LIN02>
+      <LIN03 ID="00:268">471082</LIN03>
+    </LIN>
+    <SN1 ID="269" SegmentPosition="00">
+      <SN101 ID="00:270">7</SN101>
+      <SN102 ID="00:271">1</SN102>
+      <SN103 ID="00:272">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="273" SegmentPosition="00">
+    <HL ID="274" SegmentPosition="00">
+      <HL01 ID="00:275">17</HL01>
+      <HL02 ID="00:276">3</HL02>
+      <HL03 ID="00:277">I</HL03>
+    </HL>
+    <LIN ID="278" SegmentPosition="00">
+      <LIN01 ID="00:279">7</LIN01>
+      <LIN02 ID="00:280">VN</LIN02>
+      <LIN03 ID="00:281">471082</LIN03>
+    </LIN>
+    <SN1 ID="282" SegmentPosition="00">
+      <SN101 ID="00:283">7</SN101>
+      <SN102 ID="00:284">1</SN102>
+      <SN103 ID="00:285">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="286" SegmentPosition="00">
+    <HL ID="287" SegmentPosition="00">
+      <HL01 ID="00:288">18</HL01>
+      <HL02 ID="00:289">3</HL02>
+      <HL03 ID="00:290">I</HL03>
+    </HL>
+    <LIN ID="291" SegmentPosition="00">
+      <LIN01 ID="00:292">7</LIN01>
+      <LIN02 ID="00:293">VN</LIN02>
+      <LIN03 ID="00:294">471082</LIN03>
+    </LIN>
+    <SN1 ID="295" SegmentPosition="00">
+      <SN101 ID="00:296">7</SN101>
+      <SN102 ID="00:297">1</SN102>
+      <SN103 ID="00:298">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="299" SegmentPosition="00">
+    <HL ID="300" SegmentPosition="00">
+      <HL01 ID="00:301">19</HL01>
+      <HL02 ID="00:302">2</HL02>
+      <HL03 ID="00:303">P</HL03>
+    </HL>
+    <REF ID="304" SegmentPosition="00">
+      <REF01 ID="00:305">CN</REF01>
+      <REF02 ID="00:306">00008100059602657186</REF02>
+    </REF>
+    <MAN ID="307" SegmentPosition="00">
+      <MAN01 ID="00:308">GM</MAN01>
+      <MAN02 ID="00:309">00008100059602657186</MAN02>
+    </MAN>
+  </HLLoop1>
+  <HLLoop1 ID="310" SegmentPosition="00">
+    <HL ID="311" SegmentPosition="00">
+      <HL01 ID="00:312">20</HL01>
+      <HL02 ID="00:313">19</HL02>
+      <HL03 ID="00:314">I</HL03>
+    </HL>
+    <LIN ID="315" SegmentPosition="00">
+      <LIN01 ID="00:316">6</LIN01>
+      <LIN02 ID="00:317">VN</LIN02>
+      <LIN03 ID="00:318">314440</LIN03>
+    </LIN>
+    <SN1 ID="319" SegmentPosition="00">
+      <SN101 ID="00:320">6</SN101>
+      <SN102 ID="00:321">4</SN102>
+      <SN103 ID="00:322">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="323" SegmentPosition="00">
+    <HL ID="324" SegmentPosition="00">
+      <HL01 ID="00:325">21</HL01>
+      <HL02 ID="00:326">19</HL02>
+      <HL03 ID="00:327">I</HL03>
+    </HL>
+    <LIN ID="328" SegmentPosition="00">
+      <LIN01 ID="00:329">6</LIN01>
+      <LIN02 ID="00:330">VN</LIN02>
+      <LIN03 ID="00:331">314440</LIN03>
+    </LIN>
+    <SN1 ID="332" SegmentPosition="00">
+      <SN101 ID="00:333">6</SN101>
+      <SN102 ID="00:334">5</SN102>
+      <SN103 ID="00:335">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="336" SegmentPosition="00">
+    <HL ID="337" SegmentPosition="00">
+      <HL01 ID="00:338">22</HL01>
+      <HL02 ID="00:339">19</HL02>
+      <HL03 ID="00:340">I</HL03>
+    </HL>
+    <LIN ID="341" SegmentPosition="00">
+      <LIN01 ID="00:342">7</LIN01>
+      <LIN02 ID="00:343">VN</LIN02>
+      <LIN03 ID="00:344">471082</LIN03>
+    </LIN>
+    <SN1 ID="345" SegmentPosition="00">
+      <SN101 ID="00:346">7</SN101>
+      <SN102 ID="00:347">1</SN102>
+      <SN103 ID="00:348">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="349" SegmentPosition="00">
+    <HL ID="350" SegmentPosition="00">
+      <HL01 ID="00:351">23</HL01>
+      <HL02 ID="00:352">19</HL02>
+      <HL03 ID="00:353">I</HL03>
+    </HL>
+    <LIN ID="354" SegmentPosition="00">
+      <LIN01 ID="00:355">7</LIN01>
+      <LIN02 ID="00:356">VN</LIN02>
+      <LIN03 ID="00:357">471082</LIN03>
+    </LIN>
+    <SN1 ID="358" SegmentPosition="00">
+      <SN101 ID="00:359">7</SN101>
+      <SN102 ID="00:360">1</SN102>
+      <SN103 ID="00:361">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="362" SegmentPosition="00">
+    <HL ID="363" SegmentPosition="00">
+      <HL01 ID="00:364">24</HL01>
+      <HL02 ID="00:365">2</HL02>
+      <HL03 ID="00:366">P</HL03>
+    </HL>
+    <REF ID="367" SegmentPosition="00">
+      <REF01 ID="00:368">CN</REF01>
+      <REF02 ID="00:369">00008100059602657193</REF02>
+    </REF>
+    <MAN ID="370" SegmentPosition="00">
+      <MAN01 ID="00:371">GM</MAN01>
+      <MAN02 ID="00:372">00008100059602657193</MAN02>
+    </MAN>
+  </HLLoop1>
+  <HLLoop1 ID="373" SegmentPosition="00">
+    <HL ID="374" SegmentPosition="00">
+      <HL01 ID="00:375">25</HL01>
+      <HL02 ID="00:376">24</HL02>
+      <HL03 ID="00:377">I</HL03>
+    </HL>
+    <LIN ID="378" SegmentPosition="00">
+      <LIN01 ID="00:379">1</LIN01>
+      <LIN02 ID="00:380">VN</LIN02>
+      <LIN03 ID="00:381">971119</LIN03>
+    </LIN>
+    <SN1 ID="382" SegmentPosition="00">
+      <SN101 ID="00:383">1</SN101>
+      <SN102 ID="00:384">3</SN102>
+      <SN103 ID="00:385">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="386" SegmentPosition="00">
+    <HL ID="387" SegmentPosition="00">
+      <HL01 ID="00:388">26</HL01>
+      <HL02 ID="00:389">24</HL02>
+      <HL03 ID="00:390">I</HL03>
+    </HL>
+    <LIN ID="391" SegmentPosition="00">
+      <LIN01 ID="00:392">4</LIN01>
+      <LIN02 ID="00:393">VN</LIN02>
+      <LIN03 ID="00:394">951127</LIN03>
+    </LIN>
+    <SN1 ID="395" SegmentPosition="00">
+      <SN101 ID="00:396">4</SN101>
+      <SN102 ID="00:397">4</SN102>
+      <SN103 ID="00:398">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="399" SegmentPosition="00">
+    <HL ID="400" SegmentPosition="00">
+      <HL01 ID="00:401">27</HL01>
+      <HL02 ID="00:402">24</HL02>
+      <HL03 ID="00:403">I</HL03>
+    </HL>
+    <LIN ID="404" SegmentPosition="00">
+      <LIN01 ID="00:405">5</LIN01>
+      <LIN02 ID="00:406">VN</LIN02>
+      <LIN03 ID="00:407">304420</LIN03>
+    </LIN>
+    <SN1 ID="408" SegmentPosition="00">
+      <SN101 ID="00:409">5</SN101>
+      <SN102 ID="00:410">12</SN102>
+      <SN103 ID="00:411">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="412" SegmentPosition="00">
+    <HL ID="413" SegmentPosition="00">
+      <HL01 ID="00:414">28</HL01>
+      <HL02 ID="00:415">2</HL02>
+      <HL03 ID="00:416">P</HL03>
+    </HL>
+    <REF ID="417" SegmentPosition="00">
+      <REF01 ID="00:418">CN</REF01>
+      <REF02 ID="00:419">00008100059602657209</REF02>
+    </REF>
+    <MAN ID="420" SegmentPosition="00">
+      <MAN01 ID="00:421">GM</MAN01>
+      <MAN02 ID="00:422">00008100059602657209</MAN02>
+    </MAN>
+  </HLLoop1>
+  <HLLoop1 ID="423" SegmentPosition="00">
+    <HL ID="424" SegmentPosition="00">
+      <HL01 ID="00:425">29</HL01>
+      <HL02 ID="00:426">28</HL02>
+      <HL03 ID="00:427">I</HL03>
+    </HL>
+    <LIN ID="428" SegmentPosition="00">
+      <LIN01 ID="00:429">2</LIN01>
+      <LIN02 ID="00:430">VN</LIN02>
+      <LIN03 ID="00:431">952320</LIN03>
+    </LIN>
+    <SN1 ID="432" SegmentPosition="00">
+      <SN101 ID="00:433">2</SN101>
+      <SN102 ID="00:434">8</SN102>
+      <SN103 ID="00:435">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <HLLoop1 ID="436" SegmentPosition="00">
+    <HL ID="437" SegmentPosition="00">
+      <HL01 ID="00:438">30</HL01>
+      <HL02 ID="00:439">28</HL02>
+      <HL03 ID="00:440">I</HL03>
+    </HL>
+    <LIN ID="441" SegmentPosition="00">
+      <LIN01 ID="00:442">3</LIN01>
+      <LIN02 ID="00:443">VN</LIN02>
+      <LIN03 ID="00:444">950630</LIN03>
+    </LIN>
+    <SN1 ID="445" SegmentPosition="00">
+      <SN101 ID="00:446">3</SN101>
+      <SN102 ID="00:447">2</SN102>
+      <SN103 ID="00:448">EA</SN103>
+    </SN1>
+  </HLLoop1>
+  <CTT ID="449" SegmentPosition="00">
+    <CTT01 ID="00:450">30</CTT01>
+    <CTT02 ID="00:451">55</CTT02>
+  </CTT>
+  <SE ID="452" SegmentPosition="00">
+    <SE01 ID="00:453">1</SE01>
+    <SE02 ID="00:454">0001</SE02>
+  </SE>
+  <GE ID="455" SegmentPosition="00">
+    <GE01 ID="00:456">3</GE01>
+    <GE02 ID="00:457">9467</GE02>
+  </GE>
+  <IEA ID="458" SegmentPosition="00">
+    <IEA01 ID="00:459">1</IEA01>
+    <IEA02 ID="00:460">495512433</IEA02>
+  </IEA>
+</X12_00501_856>
