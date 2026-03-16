@@ -7,7 +7,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Core AI & LLM ─────────────────────────────────────────────────────────────
-# Groq SDK for LLM inference (intent scoring and conversational AI)
+# Groq SDK for LLM inference (intent scoring and conversational AI) - Version 1.0.0
 groq~=1.0.0
 
 # Environment variable management (loads .env file for API keys)
