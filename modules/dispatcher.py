@@ -9,7 +9,7 @@ then calls the appropriate engine for each active intent.
 Currently implemented:   explain  → groq_agent.explain()
                          simulate → simulation_engine.simulate()
                          modify   → modification_engine.modify()
-Stubbed (not yet built): generate → xslt_generator.generate()
+                         generate → xslt_generator.generate()
 
 Usage (as module):
     from modules.dispatcher import dispatch
@@ -44,12 +44,7 @@ for _candidate in [_here / ".env", _here.parent / ".env"]:
 
 # Placeholder responses for engines that are not yet built.
 # These are shown in the dispatch result instead of crashing.
-_UNBUILT = {
-    "generate": (
-        "[generate] The Generate engine is not yet implemented. "
-        "Planned: xslt_generator.generate() — create a new XSLT from requirements."
-    ),
-}
+_UNBUILT: dict = {}   # all four engines are now implemented
 
 
 def dispatch(
@@ -96,12 +91,14 @@ def dispatch(
         from .groq_agent import explain
         from .simulation_engine import simulate
         from .modification_engine import modify
+        from .xslt_generator import generate
     except ImportError:
         from intent_router import route          # fallback for standalone execution
         from file_ingestion import ingest_file
         from groq_agent import explain
         from simulation_engine import simulate
         from modification_engine import modify
+        from xslt_generator import generate
 
     # ── Resolve model (caller > env var > default) ────────────────────────────
     resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -164,8 +161,14 @@ def dispatch(
                 )
                 responses[intent] = response
 
-        elif intent in _UNBUILT:
-            responses[intent] = _UNBUILT[intent]
+        elif intent == "generate":
+            response, _ = generate(
+                generation_request=user_message,
+                source_sample=source_file,
+                api_key=api_key,
+                model=resolved_model,
+            )
+            responses[intent] = response
 
     primary = route_result["primary"]
     primary_response = responses.get(primary, "")
