@@ -1,0 +1,162 @@
+<X12_00401_810 xml:space="preserve" ID="1">
+  <ISA ID="2" SegmentPosition="00">
+    <ISA01 ID="00:3">00</ISA01>
+    <ISA02 ID="00:4">          </ISA02>
+    <ISA03 ID="00:5">00</ISA03>
+    <ISA04 ID="00:6">          </ISA04>
+    <ISA05 ID="00:7">12</ISA05>
+    <ISA06 ID="00:8">4356735021     </ISA06>
+    <ISA07 ID="00:9">01</ISA07>
+    <ISA08 ID="00:10">001903202      </ISA08>
+    <ISA09 ID="00:11">260304</ISA09>
+    <ISA10 ID="00:12">1302</ISA10>
+    <ISA11 ID="00:13">U</ISA11>
+    <ISA12 ID="00:14">00401</ISA12>
+    <ISA13 ID="00:15">014134783</ISA13>
+    <ISA14 ID="00:16">1</ISA14>
+    <ISA15 ID="00:17">P</ISA15>
+    <ISA16 ID="00:18">&gt;</ISA16>
+  </ISA>
+  <GS ID="19" SegmentPosition="00">
+    <GS01 ID="00:20">IN</GS01>
+    <GS02 ID="00:21">3039565790</GS02>
+    <GS03 ID="00:22">8028623330</GS03>
+    <GS04 ID="00:23">20260304</GS04>
+    <GS05 ID="00:24">130226</GS05>
+    <GS06 ID="00:25">9467</GS06>
+    <GS07 ID="00:26">X</GS07>
+    <GS08 ID="00:27">004010</GS08>
+  </GS>
+  <ST ID="28" SegmentPosition="00">
+    <ST01 ID="00:29">810</ST01>
+    <ST02 ID="00:30">0001</ST02>
+  </ST>
+  <BIG ID="31" SegmentPosition="00">
+    <BIG01 ID="00:32">20260304</BIG01>
+    <BIG02 ID="00:33">SOCI-214387</BIG02>
+    <BIG03 ID="00:34">20260226</BIG03>
+    <BIG04 ID="00:35">4527632724</BIG04>
+    <BIG05 ID="00:36" />
+    <BIG06 ID="00:37" />
+    <BIG07 ID="00:38">DI</BIG07>
+  </BIG>
+  <CUR ID="39" SegmentPosition="00">
+    <CUR01 ID="00:40">SE</CUR01>
+    <CUR02 ID="00:41">USD</CUR02>
+  </CUR>
+  <REF ID="42" SegmentPosition="00">
+    <REF01 ID="00:43">VR</REF01>
+    <REF02 ID="00:44">100026547</REF02>
+  </REF>
+  <N1Loop1 ID="45" SegmentPosition="00">
+    <N1 ID="46" SegmentPosition="00">
+      <N101 ID="00:47">SF</N101>
+      <N102 ID="00:48">Wilson Electronics</N102>
+      <N103 ID="00:49">92</N103>
+      <N104 ID="00:50">100026547</N104>
+    </N1>
+    <N3 ID="51" SegmentPosition="00">
+      <N301 ID="00:52">1444 E Venture Dr</N301>
+    </N3>
+    <N4 ID="53" SegmentPosition="00">
+      <N401 ID="00:54">Saint George</N401>
+      <N402 ID="00:55">UT</N402>
+      <N403 ID="00:56">84790</N403>
+    </N4>
+  </N1Loop1>
+  <N1Loop1 ID="57" SegmentPosition="00">
+    <N1 ID="58" SegmentPosition="00">
+      <N101 ID="00:59">ST</N101>
+      <N102 ID="00:60">Graybar Electric Co, Inc SHLA</N102>
+    </N1>
+    <N2 ID="61" SegmentPosition="00">
+      <N201 ID="00:62">Graybar Electric Co, Inc SHLA</N201>
+    </N2>
+    <N3 ID="63" SegmentPosition="00">
+      <N301 ID="00:64">2536 LINWOOD AVE</N301>
+    </N3>
+    <N4 ID="65" SegmentPosition="00">
+      <N401 ID="00:66">Shreveport</N401>
+      <N402 ID="00:67">LA</N402>
+      <N403 ID="00:68">71103</N403>
+    </N4>
+  </N1Loop1>
+  <N1Loop1 ID="69" SegmentPosition="00">
+    <N1 ID="70" SegmentPosition="00">
+      <N101 ID="00:71">BT</N101>
+      <N102 ID="00:72">Graybar Inc  Vendor 100026547</N102>
+    </N1>
+    <N3 ID="73" SegmentPosition="00">
+      <N301 ID="00:74">PO Box 78099</N301>
+    </N3>
+    <N4 ID="75" SegmentPosition="00">
+      <N401 ID="00:76">Saint Louis</N401>
+      <N402 ID="00:77">MO</N402>
+      <N403 ID="00:78">63178</N403>
+    </N4>
+  </N1Loop1>
+  <ITD ID="79" SegmentPosition="00">
+    <ITD01 ID="00:80">01</ITD01>
+    <ITD02 ID="00:81">3</ITD02>
+    <ITD03 ID="00:82" />
+    <ITD04 ID="00:83" />
+    <ITD05 ID="00:84" />
+    <ITD06 ID="00:85">20260503</ITD06>
+    <ITD07 ID="00:86">60</ITD07>
+    <ITD08 ID="00:87" />
+    <ITD09 ID="00:88" />
+    <ITD10 ID="00:89" />
+    <ITD11 ID="00:90" />
+    <ITD12 ID="00:91">60 Days</ITD12>
+  </ITD>
+  <DTM ID="92" SegmentPosition="00">
+    <DTM01 ID="00:93">011</DTM01>
+    <DTM02 ID="00:94">20260227</DTM02>
+  </DTM>
+  <IT1Loop1 ID="95" SegmentPosition="00">
+    <IT1 ID="96" SegmentPosition="00">
+      <IT101 ID="00:97">1</IT101>
+      <IT102 ID="00:98">2</IT102>
+      <IT103 ID="00:99">EA</IT103>
+      <IT104 ID="00:100">12.32</IT104>
+      <IT105 ID="00:101">PE</IT105>
+      <IT106 ID="00:102">VN</IT106>
+      <IT107 ID="00:103">311125</IT107>
+    </IT1>
+    <PIDLoop1 ID="104" SegmentPosition="00">
+      <PID_2 ID="105" SegmentPosition="00">
+        <PID01 ID="00:106">F</PID01>
+        <PID02 ID="00:107" />
+        <PID03 ID="00:108" />
+        <PID04 ID="00:109" />
+        <PID05 ID="00:110">Magnet Mount Antenna 800 1900 MHz Omni Directional w 12 5 f</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <TDS ID="111" SegmentPosition="00">
+    <TDS01 ID="00:112">2464</TDS01>
+  </TDS>
+  <CAD_2 ID="113" SegmentPosition="00">
+    <CAD01 ID="00:114" />
+    <CAD02 ID="00:115" />
+    <CAD03 ID="00:116" />
+    <CAD04 ID="00:117" />
+    <CAD05 ID="00:118">UPS</CAD05>
+  </CAD_2>
+  <CTT ID="119" SegmentPosition="00">
+    <CTT01 ID="00:120">1</CTT01>
+    <CTT02 ID="00:121">2</CTT02>
+  </CTT>
+  <SE ID="122" SegmentPosition="00">
+    <SE01 ID="00:123" />
+    <SE02 ID="00:124">0001</SE02>
+  </SE>
+  <GE ID="125" SegmentPosition="00">
+    <GE01 ID="00:126">3</GE01>
+    <GE02 ID="00:127">9467</GE02>
+  </GE>
+  <IEA ID="128" SegmentPosition="00">
+    <IEA01 ID="00:129">1</IEA01>
+    <IEA02 ID="00:130">014134783</IEA02>
+  </IEA>
+</X12_00401_810>

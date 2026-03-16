@@ -73,7 +73,11 @@ def detect_file_type(filename: str, raw_text: str) -> Tuple[str, str]:
                         return ("X12_EDI", version_str)
             except Exception:
                 pass
-        return ("X12_EDI", "unknown")
+        # Only hard-classify as X12 for dedicated EDI extensions.
+        # .txt files without a valid ISA header fall through to other detectors
+        # (e.g. D365 XML files that happen to have a .txt extension).
+        if ext in [".x12", ".edi"]:
+            return ("X12_EDI", "unknown")
     
     # EDIFACT detection
     if content_start.startswith("UNA") or content_start.startswith("UNB") or ext == ".edifact":
@@ -263,99 +267,90 @@ def detect_file_type(filename: str, raw_text: str) -> Tuple[str, str]:
 
 def parse_x12_edi(raw_text: str) -> dict:
     """
-    Parse X12 EDI file using pyx12.
-    
+    Parse X12 EDI using pure Python — no external library required.
+
+    X12 is a delimiter-based format. The ISA envelope segment is always
+    exactly 106 characters and encodes all separator characters at fixed
+    byte positions, so no library is needed to parse it correctly.
+
     Returns nested structure with segments grouped by functional groups
-    and transaction sets.
+    and transaction sets (identical output shape to the previous implementation).
     """
     try:
-        from pyx12 import x12context
-        from pyx12 import x12file
-        
-        # Create temporary file for pyx12 (it requires file path)
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.x12', delete=False) as tmp:
-            tmp.write(raw_text)
-            tmp_path = tmp.name
-        
-        try:
-            # Parse the X12 file
-            src = x12file.X12Reader(tmp_path)
-            result = {
-                "interchanges": []
+        isa_start = raw_text.find("ISA")
+        if isa_start < 0:
+            raise ValueError("No ISA segment found — not a valid X12 EDI file")
+
+        isa_segment = raw_text[isa_start: isa_start + 106]
+        if len(isa_segment) < 106:
+            raise ValueError(
+                f"ISA segment too short ({len(isa_segment)} chars, expected 106)"
+            )
+
+        elem_sep = isa_segment[3]    # position 3:   element separator  (e.g. '*')
+        seg_term = isa_segment[105]  # position 105: segment terminator (e.g. '~' or '\\')
+        # ISA16 (component separator) is the 17th token when split by elem_sep
+        isa_elements = isa_segment.split(elem_sep)
+        comp_sep = isa_elements[16][0] if len(isa_elements) > 16 and isa_elements[16] else ":"
+
+        # Split into individual segment strings; strip surrounding whitespace; drop empties
+        raw_segments = [s.strip() for s in raw_text[isa_start:].split(seg_term)]
+        raw_segments = [s for s in raw_segments if s]
+
+        def _make_seg(elements: list) -> dict:
+            return {
+                "segment_id": elements[0].strip() if elements else "",
+                "elements": elements[1:],
             }
-            
-            current_interchange = None
-            current_group = None
-            current_transaction = None
-            
-            for seg in src:
-                seg_dict = {
-                    "segment_id": seg.get_seg_id(),
-                    "elements": []
-                }
-                
-                # Extract all elements
-                for i in range(seg.get_count()):
-                    try:
-                        element_val = seg.get_value(f"{seg.get_seg_id()}{i+1:02d}")
-                        seg_dict["elements"].append(element_val if element_val else "")
-                    except:
-                        break
-                
-                # Structure based on envelope segments
-                seg_id = seg.get_seg_id()
-                
-                if seg_id == "ISA":
-                    current_interchange = {
-                        "isa": seg_dict,
-                        "functional_groups": []
-                    }
-                    result["interchanges"].append(current_interchange)
-                    
-                elif seg_id == "GS":
-                    current_group = {
-                        "gs": seg_dict,
-                        "transaction_sets": []
-                    }
-                    if current_interchange:
-                        current_interchange["functional_groups"].append(current_group)
-                        
-                elif seg_id == "ST":
-                    current_transaction = {
-                        "st": seg_dict,
-                        "segments": []
-                    }
-                    if current_group:
-                        current_group["transaction_sets"].append(current_transaction)
-                        
-                elif seg_id == "SE":
-                    if current_transaction:
-                        current_transaction["se"] = seg_dict
-                        
-                elif seg_id == "GE":
-                    if current_group:
-                        current_group["ge"] = seg_dict
-                        
-                elif seg_id == "IEA":
-                    if current_interchange:
-                        current_interchange["iea"] = seg_dict
-                        
-                else:
-                    # Add to current transaction if we're in one
-                    if current_transaction:
-                        current_transaction["segments"].append(seg_dict)
-                    elif current_group:
-                        # Segment between GS and first ST
-                        if "pre_transaction_segments" not in current_group:
-                            current_group["pre_transaction_segments"] = []
-                        current_group["pre_transaction_segments"].append(seg_dict)
-            
-            return result
-            
-        finally:
-            os.unlink(tmp_path)
-            
+
+        result = {"interchanges": []}
+        current_interchange = None
+        current_group = None
+        current_transaction = None
+
+        for raw_seg in raw_segments:
+            elements = raw_seg.split(elem_sep)
+            seg_id = elements[0].strip()
+            if not seg_id:
+                continue
+            seg_dict = _make_seg(elements)
+
+            if seg_id == "ISA":
+                current_interchange = {"isa": seg_dict, "functional_groups": []}
+                result["interchanges"].append(current_interchange)
+
+            elif seg_id == "GS":
+                current_group = {"gs": seg_dict, "transaction_sets": []}
+                if current_interchange is not None:
+                    current_interchange["functional_groups"].append(current_group)
+
+            elif seg_id == "ST":
+                current_transaction = {"st": seg_dict, "segments": []}
+                if current_group is not None:
+                    current_group["transaction_sets"].append(current_transaction)
+
+            elif seg_id == "SE":
+                if current_transaction is not None:
+                    current_transaction["se"] = seg_dict
+
+            elif seg_id == "GE":
+                if current_group is not None:
+                    current_group["ge"] = seg_dict
+
+            elif seg_id == "IEA":
+                if current_interchange is not None:
+                    current_interchange["iea"] = seg_dict
+
+            else:
+                if current_transaction is not None:
+                    current_transaction["segments"].append(seg_dict)
+                elif current_group is not None:
+                    if "pre_transaction_segments" not in current_group:
+                        current_group["pre_transaction_segments"] = []
+                    current_group["pre_transaction_segments"].append(seg_dict)
+
+        return result
+
     except Exception as e:
         raise Exception(f"X12 parsing error: {str(e)}")
 

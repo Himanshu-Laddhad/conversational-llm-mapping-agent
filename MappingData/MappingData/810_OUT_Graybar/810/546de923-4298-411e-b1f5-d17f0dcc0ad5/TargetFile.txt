@@ -1,0 +1,522 @@
+<X12_00401_810 xml:space="preserve" ID="1">
+  <ISA ID="2" SegmentPosition="00">
+    <ISA01 ID="00:3">00</ISA01>
+    <ISA02 ID="00:4">          </ISA02>
+    <ISA03 ID="00:5">00</ISA03>
+    <ISA04 ID="00:6">          </ISA04>
+    <ISA05 ID="00:7">12</ISA05>
+    <ISA06 ID="00:8">4356735021     </ISA06>
+    <ISA07 ID="00:9">01</ISA07>
+    <ISA08 ID="00:10">001903202      </ISA08>
+    <ISA09 ID="00:11">260303</ISA09>
+    <ISA10 ID="00:12">1903</ISA10>
+    <ISA11 ID="00:13">U</ISA11>
+    <ISA12 ID="00:14">00401</ISA12>
+    <ISA13 ID="00:15">396772450</ISA13>
+    <ISA14 ID="00:16">1</ISA14>
+    <ISA15 ID="00:17">P</ISA15>
+    <ISA16 ID="00:18">&gt;</ISA16>
+  </ISA>
+  <GS ID="19" SegmentPosition="00">
+    <GS01 ID="00:20">IN</GS01>
+    <GS02 ID="00:21">3039565790</GS02>
+    <GS03 ID="00:22">8028623330</GS03>
+    <GS04 ID="00:23">20260303</GS04>
+    <GS05 ID="00:24">190325</GS05>
+    <GS06 ID="00:25">9467</GS06>
+    <GS07 ID="00:26">X</GS07>
+    <GS08 ID="00:27">004010</GS08>
+  </GS>
+  <ST ID="28" SegmentPosition="00">
+    <ST01 ID="00:29">810</ST01>
+    <ST02 ID="00:30">0001</ST02>
+  </ST>
+  <BIG ID="31" SegmentPosition="00">
+    <BIG01 ID="00:32">20260303</BIG01>
+    <BIG02 ID="00:33">SOCI-214562</BIG02>
+    <BIG03 ID="00:34">20260224</BIG03>
+    <BIG04 ID="00:35">4527623464</BIG04>
+    <BIG05 ID="00:36" />
+    <BIG06 ID="00:37" />
+    <BIG07 ID="00:38">DI</BIG07>
+  </BIG>
+  <CUR ID="39" SegmentPosition="00">
+    <CUR01 ID="00:40">SE</CUR01>
+    <CUR02 ID="00:41">USD</CUR02>
+  </CUR>
+  <REF ID="42" SegmentPosition="00">
+    <REF01 ID="00:43">VR</REF01>
+    <REF02 ID="00:44">100026547</REF02>
+  </REF>
+  <N1Loop1 ID="45" SegmentPosition="00">
+    <N1 ID="46" SegmentPosition="00">
+      <N101 ID="00:47">SF</N101>
+      <N102 ID="00:48">Wilson Electronics</N102>
+      <N103 ID="00:49">92</N103>
+      <N104 ID="00:50">100026547</N104>
+    </N1>
+    <N3 ID="51" SegmentPosition="00">
+      <N301 ID="00:52">1444 E Venture Dr</N301>
+    </N3>
+    <N4 ID="53" SegmentPosition="00">
+      <N401 ID="00:54">Saint George</N401>
+      <N402 ID="00:55">UT</N402>
+      <N403 ID="00:56">84790</N403>
+    </N4>
+  </N1Loop1>
+  <N1Loop1 ID="57" SegmentPosition="00">
+    <N1 ID="58" SegmentPosition="00">
+      <N101 ID="00:59">ST</N101>
+      <N102 ID="00:60">Epitome Networks CDR021126</N102>
+    </N1>
+    <N2 ID="61" SegmentPosition="00">
+      <N201 ID="00:62">Epitome Networks CDR021126</N201>
+    </N2>
+    <N3 ID="63" SegmentPosition="00">
+      <N301 ID="00:64">4201 Park Place Court</N301>
+    </N3>
+    <N4 ID="65" SegmentPosition="00">
+      <N401 ID="00:66">Glen Allen</N401>
+      <N402 ID="00:67">VA</N402>
+      <N403 ID="00:68">23060</N403>
+    </N4>
+  </N1Loop1>
+  <N1Loop1 ID="69" SegmentPosition="00">
+    <N1 ID="70" SegmentPosition="00">
+      <N101 ID="00:71">BT</N101>
+      <N102 ID="00:72">Graybar Inc  Vendor 100026547</N102>
+    </N1>
+    <N3 ID="73" SegmentPosition="00">
+      <N301 ID="00:74">PO Box 78099</N301>
+    </N3>
+    <N4 ID="75" SegmentPosition="00">
+      <N401 ID="00:76">Saint Louis</N401>
+      <N402 ID="00:77">MO</N402>
+      <N403 ID="00:78">63178</N403>
+    </N4>
+  </N1Loop1>
+  <ITD ID="79" SegmentPosition="00">
+    <ITD01 ID="00:80">01</ITD01>
+    <ITD02 ID="00:81">3</ITD02>
+    <ITD03 ID="00:82" />
+    <ITD04 ID="00:83" />
+    <ITD05 ID="00:84" />
+    <ITD06 ID="00:85">20260502</ITD06>
+    <ITD07 ID="00:86">60</ITD07>
+    <ITD08 ID="00:87" />
+    <ITD09 ID="00:88" />
+    <ITD10 ID="00:89" />
+    <ITD11 ID="00:90" />
+    <ITD12 ID="00:91">60 Days</ITD12>
+  </ITD>
+  <DTM ID="92" SegmentPosition="00">
+    <DTM01 ID="00:93">011</DTM01>
+    <DTM02 ID="00:94">20260303</DTM02>
+  </DTM>
+  <IT1Loop1 ID="95" SegmentPosition="00">
+    <IT1 ID="96" SegmentPosition="00">
+      <IT101 ID="00:97">1</IT101>
+      <IT102 ID="00:98">153</IT102>
+      <IT103 ID="00:99">EA</IT103>
+      <IT104 ID="00:100">48.4</IT104>
+      <IT105 ID="00:101">PE</IT105>
+      <IT106 ID="00:102">VN</IT106>
+      <IT107 ID="00:103">310005</IT107>
+    </IT1>
+    <PIDLoop1 ID="104" SegmentPosition="00">
+      <PID_2 ID="105" SegmentPosition="00">
+        <PID01 ID="00:106">F</PID01>
+        <PID02 ID="00:107" />
+        <PID03 ID="00:108" />
+        <PID04 ID="00:109" />
+        <PID05 ID="00:110">Omni, Indoor, Ultra Low Profile, Ceiling, SISO, NF, 600 6000</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="111" SegmentPosition="00">
+    <IT1 ID="112" SegmentPosition="00">
+      <IT101 ID="00:113">2</IT101>
+      <IT102 ID="00:114">3</IT102>
+      <IT103 ID="00:115">EA</IT103>
+      <IT104 ID="00:116">44</IT104>
+      <IT105 ID="00:117">PE</IT105>
+      <IT106 ID="00:118">VN</IT106>
+      <IT107 ID="00:119">311245</IT107>
+    </IT1>
+    <PIDLoop1 ID="120" SegmentPosition="00">
+      <PID_2 ID="121" SegmentPosition="00">
+        <PID01 ID="00:122">F</PID01>
+        <PID02 ID="00:123" />
+        <PID03 ID="00:124" />
+        <PID04 ID="00:125" />
+        <PID05 ID="00:126">Wideband Directional Antenna 50 Ohm 600 4000MHz Rev: 001 W</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="127" SegmentPosition="00">
+    <IT1 ID="128" SegmentPosition="00">
+      <IT101 ID="00:129">3</IT101>
+      <IT102 ID="00:130">1</IT102>
+      <IT103 ID="00:131">EA</IT103>
+      <IT104 ID="00:132">960</IT104>
+      <IT105 ID="00:133">PE</IT105>
+      <IT106 ID="00:134">VN</IT106>
+      <IT107 ID="00:135">460074</IT107>
+    </IT1>
+    <PIDLoop1 ID="136" SegmentPosition="00">
+      <PID_2 ID="137" SegmentPosition="00">
+        <PID01 ID="00:138">F</PID01>
+        <PID02 ID="00:139" />
+        <PID03 ID="00:140" />
+        <PID04 ID="00:141" />
+        <PID05 ID="00:142">Enterprise Pro 140i Booster and Power Supply Rev: 001 Ente</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="143" SegmentPosition="00">
+    <IT1 ID="144" SegmentPosition="00">
+      <IT101 ID="00:145">4</IT101>
+      <IT102 ID="00:146">1</IT102>
+      <IT103 ID="00:147">EA</IT103>
+      <IT104 ID="00:148">44</IT104>
+      <IT105 ID="00:149">PE</IT105>
+      <IT106 ID="00:150">VN</IT106>
+      <IT107 ID="00:151">314422</IT107>
+    </IT1>
+    <PIDLoop1 ID="152" SegmentPosition="00">
+      <PID_2 ID="153" SegmentPosition="00">
+        <PID01 ID="00:154">F</PID01>
+        <PID02 ID="00:155" />
+        <PID03 ID="00:156" />
+        <PID04 ID="00:157" />
+        <PID05 ID="00:158">Omni Plus Building Antenna 50 ohm w N Female Connector and </PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="159" SegmentPosition="00">
+    <IT1 ID="160" SegmentPosition="00">
+      <IT101 ID="00:161">5</IT101>
+      <IT102 ID="00:162">1</IT102>
+      <IT103 ID="00:163">EA</IT103>
+      <IT104 ID="00:164">8808</IT104>
+      <IT105 ID="00:165">PE</IT105>
+      <IT106 ID="00:166">VN</IT106>
+      <IT107 ID="00:167">466075</IT107>
+    </IT1>
+    <PIDLoop1 ID="168" SegmentPosition="00">
+      <PID_2 ID="169" SegmentPosition="00">
+        <PID01 ID="00:170">F</PID01>
+        <PID02 ID="00:171" />
+        <PID03 ID="00:172" />
+        <PID04 ID="00:173" />
+        <PID05 ID="00:174">Enterprise 4330 Industrial Rack Mount Amp and Power Supply R</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="175" SegmentPosition="00">
+    <IT1 ID="176" SegmentPosition="00">
+      <IT101 ID="00:177">6</IT101>
+      <IT102 ID="00:178">4</IT102>
+      <IT103 ID="00:179">EA</IT103>
+      <IT104 ID="00:180">39.6</IT104>
+      <IT105 ID="00:181">PE</IT105>
+      <IT106 ID="00:182">VN</IT106>
+      <IT107 ID="00:183">850050</IT107>
+    </IT1>
+    <PIDLoop1 ID="184" SegmentPosition="00">
+      <PID_2 ID="185" SegmentPosition="00">
+        <PID01 ID="00:186">F</PID01>
+        <PID02 ID="00:187" />
+        <PID03 ID="00:188" />
+        <PID04 ID="00:189" />
+        <PID05 ID="00:190">Lightning Arrestor DC 6000 MHZ, 50 Ohm, NF Rev: 001 Lightn</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="191" SegmentPosition="00">
+    <IT1 ID="192" SegmentPosition="00">
+      <IT101 ID="00:193">7</IT101>
+      <IT102 ID="00:194">80</IT102>
+      <IT103 ID="00:195">EA</IT103>
+      <IT104 ID="00:196">44</IT104>
+      <IT105 ID="00:197">PE</IT105>
+      <IT106 ID="00:198">VN</IT106>
+      <IT107 ID="00:199">859105</IT107>
+    </IT1>
+    <PIDLoop1 ID="200" SegmentPosition="00">
+      <PID_2 ID="201" SegmentPosition="00">
+        <PID01 ID="00:202">F</PID01>
+        <PID02 ID="00:203" />
+        <PID03 ID="00:204" />
+        <PID04 ID="00:205" />
+        <PID05 ID="00:206"> 3 dB 2 Way Splitter 600 4000 MHz Rev: 003 Splitter 2 Way </PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="207" SegmentPosition="00">
+    <IT1 ID="208" SegmentPosition="00">
+      <IT101 ID="00:209">8</IT101>
+      <IT102 ID="00:210">3</IT102>
+      <IT103 ID="00:211">EA</IT103>
+      <IT104 ID="00:212">22</IT104>
+      <IT105 ID="00:213">PE</IT105>
+      <IT106 ID="00:214">VN</IT106>
+      <IT107 ID="00:215">859926</IT107>
+    </IT1>
+    <PIDLoop1 ID="216" SegmentPosition="00">
+      <PID_2 ID="217" SegmentPosition="00">
+        <PID01 ID="00:218">F</PID01>
+        <PID02 ID="00:219" />
+        <PID03 ID="00:220" />
+        <PID04 ID="00:221" />
+        <PID05 ID="00:222">10 dB Attenuator with N Female Connectors Rev: 001 10 dB A</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="223" SegmentPosition="00">
+    <IT1 ID="224" SegmentPosition="00">
+      <IT101 ID="00:225">9</IT101>
+      <IT102 ID="00:226">2</IT102>
+      <IT103 ID="00:227">EA</IT103>
+      <IT104 ID="00:228">22</IT104>
+      <IT105 ID="00:229">PE</IT105>
+      <IT106 ID="00:230">VN</IT106>
+      <IT107 ID="00:231">859936</IT107>
+    </IT1>
+    <PIDLoop1 ID="232" SegmentPosition="00">
+      <PID_2 ID="233" SegmentPosition="00">
+        <PID01 ID="00:234">F</PID01>
+        <PID02 ID="00:235" />
+        <PID03 ID="00:236" />
+        <PID04 ID="00:237" />
+        <PID05 ID="00:238">6 dB Attenuator with N Female Connectors Rev: 001 6 dB Att</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="239" SegmentPosition="00">
+    <IT1 ID="240" SegmentPosition="00">
+      <IT101 ID="00:241">10</IT101>
+      <IT102 ID="00:242">1</IT102>
+      <IT103 ID="00:243">EA</IT103>
+      <IT104 ID="00:244">883.99</IT104>
+      <IT105 ID="00:245">PE</IT105>
+      <IT106 ID="00:246">VN</IT106>
+      <IT107 ID="00:247">910060</IT107>
+    </IT1>
+    <PIDLoop1 ID="248" SegmentPosition="00">
+      <PID_2 ID="249" SegmentPosition="00">
+        <PID01 ID="00:250">F</PID01>
+        <PID02 ID="00:251" />
+        <PID03 ID="00:252" />
+        <PID04 ID="00:253" />
+        <PID05 ID="00:254">WilsonPro Cellular Network Scanner 5G Rev: 002 WilsonPro C</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="255" SegmentPosition="00">
+    <IT1 ID="256" SegmentPosition="00">
+      <IT101 ID="00:257">11</IT101>
+      <IT102 ID="00:258">10</IT102>
+      <IT103 ID="00:259">EA</IT103>
+      <IT104 ID="00:260">1145.4</IT104>
+      <IT105 ID="00:261">PE</IT105>
+      <IT106 ID="00:262">VN</IT106>
+      <IT107 ID="00:263">952003</IT107>
+    </IT1>
+    <PIDLoop1 ID="264" SegmentPosition="00">
+      <PID_2 ID="265" SegmentPosition="00">
+        <PID01 ID="00:266">F</PID01>
+        <PID02 ID="00:267" />
+        <PID03 ID="00:268" />
+        <PID04 ID="00:269" />
+        <PID05 ID="00:270">1 2 inch plenum air dielectric cable 500 ft Rev: 010 1 2</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="271" SegmentPosition="00">
+    <IT1 ID="272" SegmentPosition="00">
+      <IT101 ID="00:273">12</IT101>
+      <IT102 ID="00:274">2</IT102>
+      <IT103 ID="00:275">EA</IT103>
+      <IT104 ID="00:276">829.99</IT104>
+      <IT105 ID="00:277">PE</IT105>
+      <IT106 ID="00:278">VN</IT106>
+      <IT107 ID="00:279">952006</IT107>
+    </IT1>
+    <PIDLoop1 ID="280" SegmentPosition="00">
+      <PID_2 ID="281" SegmentPosition="00">
+        <PID01 ID="00:282">F</PID01>
+        <PID02 ID="00:283" />
+        <PID03 ID="00:284" />
+        <PID04 ID="00:285" />
+        <PID05 ID="00:286">1 2 in Coaxial Cable, Foam Dielectric, 500 ft Spool Rev: 00</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="287" SegmentPosition="00">
+    <IT1 ID="288" SegmentPosition="00">
+      <IT101 ID="00:289">13</IT101>
+      <IT102 ID="00:290">41</IT102>
+      <IT103 ID="00:291">EA</IT103>
+      <IT104 ID="00:292">154</IT104>
+      <IT105 ID="00:293">PE</IT105>
+      <IT106 ID="00:294">VN</IT106>
+      <IT107 ID="00:295">970014-10</IT107>
+    </IT1>
+    <PIDLoop1 ID="296" SegmentPosition="00">
+      <PID_2 ID="297" SegmentPosition="00">
+        <PID01 ID="00:298">F</PID01>
+        <PID02 ID="00:299" />
+        <PID03 ID="00:300" />
+        <PID04 ID="00:301" />
+        <PID05 ID="00:302">N Male Connector for 1 2 inch Plenum Cable, Quantity 10 Rev:</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="303" SegmentPosition="00">
+    <IT1 ID="304" SegmentPosition="00">
+      <IT101 ID="00:305">14</IT101>
+      <IT102 ID="00:306">2</IT102>
+      <IT103 ID="00:307">EA</IT103>
+      <IT104 ID="00:308">44</IT104>
+      <IT105 ID="00:309">PE</IT105>
+      <IT106 ID="00:310">VN</IT106>
+      <IT107 ID="00:311">970024-10</IT107>
+    </IT1>
+    <PIDLoop1 ID="312" SegmentPosition="00">
+      <PID_2 ID="313" SegmentPosition="00">
+        <PID01 ID="00:314">F</PID01>
+        <PID02 ID="00:315" />
+        <PID03 ID="00:316" />
+        <PID04 ID="00:317" />
+        <PID05 ID="00:318">Packaged N Male Connector no solder for 400 Cable Quantity</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="319" SegmentPosition="00">
+    <IT1 ID="320" SegmentPosition="00">
+      <IT101 ID="00:321">15</IT101>
+      <IT102 ID="00:322">6</IT102>
+      <IT103 ID="00:323">EA</IT103>
+      <IT104 ID="00:324">5.28</IT104>
+      <IT105 ID="00:325">PE</IT105>
+      <IT106 ID="00:326">VN</IT106>
+      <IT107 ID="00:327">971117</IT107>
+    </IT1>
+    <PIDLoop1 ID="328" SegmentPosition="00">
+      <PID_2 ID="329" SegmentPosition="00">
+        <PID01 ID="00:330">F</PID01>
+        <PID02 ID="00:331" />
+        <PID03 ID="00:332" />
+        <PID04 ID="00:333" />
+        <PID05 ID="00:334">Connector Adapter N Female N Female Rev: 002 Connector A</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="335" SegmentPosition="00">
+    <IT1 ID="336" SegmentPosition="00">
+      <IT101 ID="00:337">16</IT101>
+      <IT102 ID="00:338">4</IT102>
+      <IT103 ID="00:339">EA</IT103>
+      <IT104 ID="00:340">7.92</IT104>
+      <IT105 ID="00:341">PE</IT105>
+      <IT106 ID="00:342">VN</IT106>
+      <IT107 ID="00:343">971148</IT107>
+    </IT1>
+    <PIDLoop1 ID="344" SegmentPosition="00">
+      <PID_2 ID="345" SegmentPosition="00">
+        <PID01 ID="00:346">F</PID01>
+        <PID02 ID="00:347" />
+        <PID03 ID="00:348" />
+        <PID04 ID="00:349" />
+        <PID05 ID="00:350">N Male N Male Connector Rev: 001 N Male N Male Connect</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="351" SegmentPosition="00">
+    <IT1 ID="352" SegmentPosition="00">
+      <IT101 ID="00:353">17</IT101>
+      <IT102 ID="00:354">1</IT102>
+      <IT103 ID="00:355">EA</IT103>
+      <IT104 ID="00:356">9294.99</IT104>
+      <IT105 ID="00:357">PE</IT105>
+      <IT106 ID="00:358">VN</IT106>
+      <IT107 ID="00:359">308-0001</IT107>
+    </IT1>
+    <PIDLoop1 ID="360" SegmentPosition="00">
+      <PID_2 ID="361" SegmentPosition="00">
+        <PID01 ID="00:362">F</PID01>
+        <PID02 ID="00:363" />
+        <PID03 ID="00:364" />
+        <PID04 ID="00:365" />
+        <PID05 ID="00:366">Zinwave 8000 Primary Hub Zinwave 8000 Primary Hub</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="367" SegmentPosition="00">
+    <IT1 ID="368" SegmentPosition="00">
+      <IT101 ID="00:369">18</IT101>
+      <IT102 ID="00:370">10</IT102>
+      <IT103 ID="00:371">EA</IT103>
+      <IT104 ID="00:372">10.99</IT104>
+      <IT105 ID="00:373">PE</IT105>
+      <IT106 ID="00:374">VN</IT106>
+      <IT107 ID="00:375">503-0001</IT107>
+    </IT1>
+    <PIDLoop1 ID="376" SegmentPosition="00">
+      <PID_2 ID="377" SegmentPosition="00">
+        <PID01 ID="00:378">F</PID01>
+        <PID02 ID="00:379" />
+        <PID03 ID="00:380" />
+        <PID04 ID="00:381" />
+        <PID05 ID="00:382">Cable Assy US Mains to IEC 2M Cable Assy US Mains to IEC 2M</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="383" SegmentPosition="00">
+    <IT1 ID="384" SegmentPosition="00">
+      <IT101 ID="00:385">19</IT101>
+      <IT102 ID="00:386">28</IT102>
+      <IT103 ID="00:387">EA</IT103>
+      <IT104 ID="00:388">78.22</IT104>
+      <IT105 ID="00:389">PE</IT105>
+      <IT106 ID="00:390">VN</IT106>
+      <IT107 ID="00:391">W603-0016</IT107>
+    </IT1>
+    <PIDLoop1 ID="392" SegmentPosition="00">
+      <PID_2 ID="393" SegmentPosition="00">
+        <PID01 ID="00:394">F</PID01>
+        <PID02 ID="00:395" />
+        <PID03 ID="00:396" />
+        <PID04 ID="00:397" />
+        <PID05 ID="00:398">Antenna Coaxial Transmission Lines, N Male to N Male 6 Plen</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <TDS ID="399" SegmentPosition="00">
+    <TDS01 ID="00:400">5319598</TDS01>
+  </TDS>
+  <CAD_2 ID="401" SegmentPosition="00">
+    <CAD01 ID="00:402" />
+    <CAD02 ID="00:403" />
+    <CAD03 ID="00:404" />
+    <CAD04 ID="00:405" />
+    <CAD05 ID="00:406">Common Carrier</CAD05>
+  </CAD_2>
+  <CTT ID="407" SegmentPosition="00">
+    <CTT01 ID="00:408">19</CTT01>
+    <CTT02 ID="00:409">353</CTT02>
+  </CTT>
+  <SE ID="410" SegmentPosition="00">
+    <SE01 ID="00:411" />
+    <SE02 ID="00:412">0001</SE02>
+  </SE>
+  <GE ID="413" SegmentPosition="00">
+    <GE01 ID="00:414">3</GE01>
+    <GE02 ID="00:415">9467</GE02>
+  </GE>
+  <IEA ID="416" SegmentPosition="00">
+    <IEA01 ID="00:417">1</IEA01>
+    <IEA02 ID="00:418">396772450</IEA02>
+  </IEA>
+</X12_00401_810>

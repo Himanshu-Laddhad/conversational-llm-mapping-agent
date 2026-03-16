@@ -1,0 +1,369 @@
+<X12_00501_810 xml:space="preserve" ID="1">
+  <ISA ID="2" SegmentPosition="00">
+    <ISA01 ID="00:3">00</ISA01>
+    <ISA02 ID="00:4">          </ISA02>
+    <ISA03 ID="00:5">00</ISA03>
+    <ISA04 ID="00:6">          </ISA04>
+    <ISA05 ID="00:7">ZZ</ISA05>
+    <ISA06 ID="00:8">0196304000003  </ISA06>
+    <ISA07 ID="00:9">ZZ</ISA07>
+    <ISA08 ID="00:10">PGATOURSTORES  </ISA08>
+    <ISA09 ID="00:11">260304</ISA09>
+    <ISA10 ID="00:12">0016</ISA10>
+    <ISA11 ID="00:13">U</ISA11>
+    <ISA12 ID="00:14">00501</ISA12>
+    <ISA13 ID="00:15">170371742</ISA13>
+    <ISA14 ID="00:16">1</ISA14>
+    <ISA15 ID="00:17">P</ISA15>
+    <ISA16 ID="00:18">&gt;</ISA16>
+  </ISA>
+  <GS ID="19" SegmentPosition="00">
+    <GS01 ID="00:20">IN</GS01>
+    <GS02 ID="00:21">3039565790</GS02>
+    <GS03 ID="00:22">8028623330</GS03>
+    <GS04 ID="00:23">20260304</GS04>
+    <GS05 ID="00:24">001633</GS05>
+    <GS06 ID="00:25">9467</GS06>
+    <GS07 ID="00:26">X</GS07>
+    <GS08 ID="00:27">005010</GS08>
+  </GS>
+  <ST ID="28" SegmentPosition="00">
+    <ST01 ID="00:29">810</ST01>
+    <ST02 ID="00:30">0001</ST02>
+  </ST>
+  <BIG ID="31" SegmentPosition="00">
+    <BIG01 ID="00:32">20260303</BIG01>
+    <BIG02 ID="00:33">IN17969934</BIG02>
+    <BIG03 ID="00:34" />
+    <BIG04 ID="00:35">4503355098</BIG04>
+  </BIG>
+  <REF ID="36" SegmentPosition="00">
+    <REF01 ID="00:37">IA</REF01>
+    <REF02 ID="00:38">0000101243</REF02>
+  </REF>
+  <REF ID="39" SegmentPosition="00">
+    <REF01 ID="00:40">BM</REF01>
+    <REF02 ID="00:41">D10017170186994</REF02>
+  </REF>
+  <N1Loop1 ID="42" SegmentPosition="00">
+    <N1 ID="43" SegmentPosition="00">
+      <N101 ID="00:44">ST</N101>
+      <N102 ID="00:45">PGA Tour Superstore Buckhead</N102>
+      <N103 ID="00:46">92</N103>
+      <N104 ID="00:47">1258</N104>
+    </N1>
+    <N3 ID="48" SegmentPosition="00">
+      <N301 ID="00:49">3255 Peachtree Rd #101</N301>
+    </N3>
+    <N4 ID="50" SegmentPosition="00">
+      <N401 ID="00:51">Atlanta</N401>
+      <N402 ID="00:52">GA</N402>
+      <N403 ID="00:53">30305</N403>
+      <N404 ID="00:54">US</N404>
+    </N4>
+  </N1Loop1>
+  <ITD ID="55" SegmentPosition="00">
+    <ITD01 ID="00:56">01</ITD01>
+    <ITD02 ID="00:57">3</ITD02>
+    <ITD03 ID="00:58" />
+    <ITD04 ID="00:59" />
+    <ITD05 ID="00:60" />
+    <ITD06 ID="00:61" />
+    <ITD07 ID="00:62">60</ITD07>
+    <ITD08 ID="00:63" />
+    <ITD09 ID="00:64" />
+    <ITD10 ID="00:65" />
+    <ITD11 ID="00:66" />
+    <ITD12 ID="00:67">Net 60 days</ITD12>
+  </ITD>
+  <DTM ID="68" SegmentPosition="00">
+    <DTM01 ID="00:69">011</DTM01>
+    <DTM02 ID="00:70">20260226</DTM02>
+  </DTM>
+  <IT1Loop1 ID="71" SegmentPosition="00">
+    <IT1 ID="72" SegmentPosition="00">
+      <IT101 ID="00:73" />
+      <IT102 ID="00:74">3</IT102>
+      <IT103 ID="00:75">EA</IT103>
+      <IT104 ID="00:76">29.00</IT104>
+      <IT105 ID="00:77" />
+      <IT106 ID="00:78">UP</IT106>
+      <IT107 ID="00:79">196304334641</IT107>
+      <IT108 ID="00:80">VN</IT108>
+      <IT109 ID="00:81">V1073</IT109>
+    </IT1>
+    <PIDLoop1 ID="82" SegmentPosition="00">
+      <PID_2 ID="83" SegmentPosition="00">
+        <PID01 ID="00:84">F</PID01>
+        <PID02 ID="00:85">08</PID02>
+        <PID03 ID="00:86" />
+        <PID04 ID="00:87" />
+        <PID05 ID="00:88">Uluwatu L/S</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="89" SegmentPosition="00">
+    <IT1 ID="90" SegmentPosition="00">
+      <IT101 ID="00:91" />
+      <IT102 ID="00:92">4</IT102>
+      <IT103 ID="00:93">EA</IT103>
+      <IT104 ID="00:94">29.00</IT104>
+      <IT105 ID="00:95" />
+      <IT106 ID="00:96">UP</IT106>
+      <IT107 ID="00:97">196304334634</IT107>
+      <IT108 ID="00:98">VN</IT108>
+      <IT109 ID="00:99">V1073</IT109>
+    </IT1>
+    <PIDLoop1 ID="100" SegmentPosition="00">
+      <PID_2 ID="101" SegmentPosition="00">
+        <PID01 ID="00:102">F</PID01>
+        <PID02 ID="00:103">08</PID02>
+        <PID03 ID="00:104" />
+        <PID04 ID="00:105" />
+        <PID05 ID="00:106">Uluwatu L/S</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="107" SegmentPosition="00">
+    <IT1 ID="108" SegmentPosition="00">
+      <IT101 ID="00:109" />
+      <IT102 ID="00:110">3</IT102>
+      <IT103 ID="00:111">EA</IT103>
+      <IT104 ID="00:112">29.00</IT104>
+      <IT105 ID="00:113" />
+      <IT106 ID="00:114">UP</IT106>
+      <IT107 ID="00:115">196304334665</IT107>
+      <IT108 ID="00:116">VN</IT108>
+      <IT109 ID="00:117">V1073</IT109>
+    </IT1>
+    <PIDLoop1 ID="118" SegmentPosition="00">
+      <PID_2 ID="119" SegmentPosition="00">
+        <PID01 ID="00:120">F</PID01>
+        <PID02 ID="00:121">08</PID02>
+        <PID03 ID="00:122" />
+        <PID04 ID="00:123" />
+        <PID05 ID="00:124">Uluwatu L/S</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="125" SegmentPosition="00">
+    <IT1 ID="126" SegmentPosition="00">
+      <IT101 ID="00:127" />
+      <IT102 ID="00:128">1</IT102>
+      <IT103 ID="00:129">EA</IT103>
+      <IT104 ID="00:130">29.00</IT104>
+      <IT105 ID="00:131" />
+      <IT106 ID="00:132">UP</IT106>
+      <IT107 ID="00:133">196304334689</IT107>
+      <IT108 ID="00:134">VN</IT108>
+      <IT109 ID="00:135">V1073</IT109>
+    </IT1>
+    <PIDLoop1 ID="136" SegmentPosition="00">
+      <PID_2 ID="137" SegmentPosition="00">
+        <PID01 ID="00:138">F</PID01>
+        <PID02 ID="00:139">08</PID02>
+        <PID03 ID="00:140" />
+        <PID04 ID="00:141" />
+        <PID05 ID="00:142">Uluwatu L/S</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="143" SegmentPosition="00">
+    <IT1 ID="144" SegmentPosition="00">
+      <IT101 ID="00:145" />
+      <IT102 ID="00:146">4</IT102>
+      <IT103 ID="00:147">EA</IT103>
+      <IT104 ID="00:148">64.00</IT104>
+      <IT105 ID="00:149" />
+      <IT106 ID="00:150">UP</IT106>
+      <IT107 ID="00:151">196304446887</IT107>
+      <IT108 ID="00:152">VN</IT108>
+      <IT109 ID="00:153">V2033</IT109>
+    </IT1>
+    <PIDLoop1 ID="154" SegmentPosition="00">
+      <PID_2 ID="155" SegmentPosition="00">
+        <PID01 ID="00:156">F</PID01>
+        <PID02 ID="00:157">08</PID02>
+        <PID03 ID="00:158" />
+        <PID04 ID="00:159" />
+        <PID05 ID="00:160">Sunday Element 1/2 Zip</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="161" SegmentPosition="00">
+    <IT1 ID="162" SegmentPosition="00">
+      <IT101 ID="00:163" />
+      <IT102 ID="00:164">3</IT102>
+      <IT103 ID="00:165">EA</IT103>
+      <IT104 ID="00:166">64.00</IT104>
+      <IT105 ID="00:167" />
+      <IT106 ID="00:168">UP</IT106>
+      <IT107 ID="00:169">196304446917</IT107>
+      <IT108 ID="00:170">VN</IT108>
+      <IT109 ID="00:171">V2033</IT109>
+    </IT1>
+    <PIDLoop1 ID="172" SegmentPosition="00">
+      <PID_2 ID="173" SegmentPosition="00">
+        <PID01 ID="00:174">F</PID01>
+        <PID02 ID="00:175">08</PID02>
+        <PID03 ID="00:176" />
+        <PID04 ID="00:177" />
+        <PID05 ID="00:178">Sunday Element 1/2 Zip</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="179" SegmentPosition="00">
+    <IT1 ID="180" SegmentPosition="00">
+      <IT101 ID="00:181" />
+      <IT102 ID="00:182">1</IT102>
+      <IT103 ID="00:183">EA</IT103>
+      <IT104 ID="00:184">49.00</IT104>
+      <IT105 ID="00:185" />
+      <IT106 ID="00:186">UP</IT106>
+      <IT107 ID="00:187">196304536533</IT107>
+      <IT108 ID="00:188">VN</IT108>
+      <IT109 ID="00:189">V286</IT109>
+    </IT1>
+    <PIDLoop1 ID="190" SegmentPosition="00">
+      <PID_2 ID="191" SegmentPosition="00">
+        <PID01 ID="00:192">F</PID01>
+        <PID02 ID="00:193">08</PID02>
+        <PID03 ID="00:194" />
+        <PID04 ID="00:195" />
+        <PID05 ID="00:196">Sunday Element Vest</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="197" SegmentPosition="00">
+    <IT1 ID="198" SegmentPosition="00">
+      <IT101 ID="00:199" />
+      <IT102 ID="00:200">1</IT102>
+      <IT103 ID="00:201">EA</IT103>
+      <IT104 ID="00:202">49.00</IT104>
+      <IT105 ID="00:203" />
+      <IT106 ID="00:204">UP</IT106>
+      <IT107 ID="00:205">196304139956</IT107>
+      <IT108 ID="00:206">VN</IT108>
+      <IT109 ID="00:207">V286</IT109>
+    </IT1>
+    <PIDLoop1 ID="208" SegmentPosition="00">
+      <PID_2 ID="209" SegmentPosition="00">
+        <PID01 ID="00:210">F</PID01>
+        <PID02 ID="00:211">08</PID02>
+        <PID03 ID="00:212" />
+        <PID04 ID="00:213" />
+        <PID05 ID="00:214">Sunday Element Vest</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="215" SegmentPosition="00">
+    <IT1 ID="216" SegmentPosition="00">
+      <IT101 ID="00:217" />
+      <IT102 ID="00:218">3</IT102>
+      <IT103 ID="00:219">EA</IT103>
+      <IT104 ID="00:220">55.00</IT104>
+      <IT105 ID="00:221" />
+      <IT106 ID="00:222">UP</IT106>
+      <IT107 ID="00:223">843084108725</IT107>
+      <IT108 ID="00:224">VN</IT108>
+      <IT109 ID="00:225">V416</IT109>
+    </IT1>
+    <PIDLoop1 ID="226" SegmentPosition="00">
+      <PID_2 ID="227" SegmentPosition="00">
+        <PID01 ID="00:228">F</PID01>
+        <PID02 ID="00:229">08</PID02>
+        <PID03 ID="00:230" />
+        <PID04 ID="00:231" />
+        <PID05 ID="00:232">Sunday Performance Jogger 28"</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="233" SegmentPosition="00">
+    <IT1 ID="234" SegmentPosition="00">
+      <IT101 ID="00:235" />
+      <IT102 ID="00:236">3</IT102>
+      <IT103 ID="00:237">EA</IT103>
+      <IT104 ID="00:238">55.00</IT104>
+      <IT105 ID="00:239" />
+      <IT106 ID="00:240">UP</IT106>
+      <IT107 ID="00:241">843084108749</IT107>
+      <IT108 ID="00:242">VN</IT108>
+      <IT109 ID="00:243">V416</IT109>
+    </IT1>
+    <PIDLoop1 ID="244" SegmentPosition="00">
+      <PID_2 ID="245" SegmentPosition="00">
+        <PID01 ID="00:246">F</PID01>
+        <PID02 ID="00:247">08</PID02>
+        <PID03 ID="00:248" />
+        <PID04 ID="00:249" />
+        <PID05 ID="00:250">Sunday Performance Jogger 28"</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <IT1Loop1 ID="251" SegmentPosition="00">
+    <IT1 ID="252" SegmentPosition="00">
+      <IT101 ID="00:253" />
+      <IT102 ID="00:254">1</IT102>
+      <IT103 ID="00:255">EA</IT103>
+      <IT104 ID="00:256">55.00</IT104>
+      <IT105 ID="00:257" />
+      <IT106 ID="00:258">UP</IT106>
+      <IT107 ID="00:259">843084108756</IT107>
+      <IT108 ID="00:260">VN</IT108>
+      <IT109 ID="00:261">V416</IT109>
+    </IT1>
+    <PIDLoop1 ID="262" SegmentPosition="00">
+      <PID_2 ID="263" SegmentPosition="00">
+        <PID01 ID="00:264">F</PID01>
+        <PID02 ID="00:265">08</PID02>
+        <PID03 ID="00:266" />
+        <PID04 ID="00:267" />
+        <PID05 ID="00:268">Sunday Performance Jogger 28"</PID05>
+      </PID_2>
+    </PIDLoop1>
+  </IT1Loop1>
+  <TDS ID="269" SegmentPosition="00">
+    <TDS01 ID="00:270">126917</TDS01>
+    <TDS02 ID="00:271">126917</TDS02>
+  </TDS>
+  <SACLoop2 ID="272" SegmentPosition="00">
+    <SAC_3 ID="273" SegmentPosition="00">
+      <SAC01 ID="00:274">C</SAC01>
+      <SAC02 ID="00:275">D240</SAC02>
+      <SAC03 ID="00:276" />
+      <SAC04 ID="00:277" />
+      <SAC05 ID="00:278">1917</SAC05>
+      <SAC06 ID="00:279" />
+      <SAC07 ID="00:280" />
+      <SAC08 ID="00:281" />
+      <SAC09 ID="00:282" />
+      <SAC10 ID="00:283" />
+      <SAC11 ID="00:284" />
+      <SAC12 ID="00:285" />
+      <SAC13 ID="00:286" />
+      <SAC14 ID="00:287" />
+      <SAC15 ID="00:288">Freight Charges</SAC15>
+    </SAC_3>
+  </SACLoop2>
+  <ISSLoop1 ID="289" SegmentPosition="00">
+    <ISS ID="290" SegmentPosition="00">
+      <ISS01 ID="00:291">27</ISS01>
+      <ISS02 ID="00:292">EA</ISS02>
+    </ISS>
+  </ISSLoop1>
+  <CTT ID="293" SegmentPosition="00">
+    <CTT01 ID="00:294">11</CTT01>
+  </CTT>
+  <SE ID="295" SegmentPosition="00">
+    <SE01 ID="00:296" />
+    <SE02 ID="00:297">0001</SE02>
+  </SE>
+  <GE ID="298" SegmentPosition="00">
+    <GE01 ID="00:299">3</GE01>
+    <GE02 ID="00:300">9467</GE02>
+  </GE>
+  <IEA ID="301" SegmentPosition="00">
+    <IEA01 ID="00:302">1</IEA01>
+    <IEA02 ID="00:303">170371742</IEA02>
+  </IEA>
+</X12_00501_810>

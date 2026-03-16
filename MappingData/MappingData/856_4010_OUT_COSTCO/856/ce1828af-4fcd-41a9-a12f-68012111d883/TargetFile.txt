@@ -1,0 +1,144 @@
+<X12_00401_856 d1p1:noNamespaceSchemaLocation="file:///D:/Projects/Wilson1/Mapforce/Costco/856/X12_00401_856.xsd" xml:space="preserve" ID="1" xmlns:d1p1="http://www.w3.org/2001/XMLSchema-instance">
+  <ISA ID="2" SegmentPosition="00">
+    <ISA01 ID="00:3">00</ISA01>
+    <ISA02 ID="00:4">          </ISA02>
+    <ISA03 ID="00:5">00</ISA03>
+    <ISA04 ID="00:6">          </ISA04>
+    <ISA05 ID="00:7">12</ISA05>
+    <ISA06 ID="00:8">4356735021     </ISA06>
+    <ISA07 ID="00:9">12</ISA07>
+    <ISA08 ID="00:10">4253138601CH   </ISA08>
+    <ISA09 ID="00:11">251223</ISA09>
+    <ISA10 ID="00:12">1614</ISA10>
+    <ISA11 ID="00:13">U</ISA11>
+    <ISA12 ID="00:14">00401</ISA12>
+    <ISA13 ID="00:15">175445514</ISA13>
+    <ISA14 ID="00:16">1</ISA14>
+    <ISA15 ID="00:17">P</ISA15>
+    <ISA16 ID="00:18">&gt;</ISA16>
+  </ISA>
+  <GS ID="19" SegmentPosition="00">
+    <GS01 ID="00:20">SH</GS01>
+    <GS02 ID="00:21">3039565790</GS02>
+    <GS03 ID="00:22">8028623330</GS03>
+    <GS04 ID="00:23">20251223</GS04>
+    <GS05 ID="00:24">161452</GS05>
+    <GS06 ID="00:25">9467</GS06>
+    <GS07 ID="00:26">X</GS07>
+    <GS08 ID="00:27">004010</GS08>
+  </GS>
+  <ST ID="28" SegmentPosition="00">
+    <ST01 ID="00:29">856</ST01>
+    <ST02 ID="00:30">0001</ST02>
+  </ST>
+  <BSN ID="31" SegmentPosition="00">
+    <BSN01 ID="00:32">00</BSN01>
+    <BSN02 ID="00:33">WHSHP-213625</BSN02>
+    <BSN03 ID="00:34">20251217</BSN03>
+    <BSN04 ID="00:35">213452</BSN04>
+    <BSN05 ID="00:36">0001</BSN05>
+  </BSN>
+  <HLLoop1 ID="37" SegmentPosition="00">
+    <HL ID="38" SegmentPosition="00">
+      <HL01 ID="00:39">1</HL01>
+      <HL02 ID="00:40" />
+      <HL03 ID="00:41">S</HL03>
+    </HL>
+    <TD1 ID="42" SegmentPosition="00">
+      <TD101 ID="00:43" />
+      <TD102 ID="00:44">1</TD102>
+      <TD103 ID="00:45" />
+      <TD104 ID="00:46" />
+      <TD105 ID="00:47" />
+      <TD106 ID="00:48">A3</TD106>
+      <TD107 ID="00:49">0</TD107>
+      <TD108 ID="00:50">01</TD108>
+    </TD1>
+    <TD5 ID="51" SegmentPosition="00">
+      <TD501 ID="00:52">B</TD501>
+      <TD502 ID="00:53" />
+      <TD503 ID="00:54" />
+      <TD504 ID="00:55" />
+      <TD505 ID="00:56">Costco UPS</TD505>
+    </TD5>
+    <REF ID="57" SegmentPosition="00">
+      <REF01 ID="00:58">CN</REF01>
+      <REF02 ID="00:59">1ZY20J840343459914</REF02>
+    </REF>
+    <DTM_2 ID="60" SegmentPosition="00">
+      <DTM01 ID="00:61">011</DTM01>
+      <DTM02 ID="00:62">20251217</DTM02>
+    </DTM_2>
+  </HLLoop1>
+  <HLLoop1 ID="63" SegmentPosition="00">
+    <HL ID="64" SegmentPosition="00">
+      <HL01 ID="00:65">2</HL01>
+      <HL02 ID="00:66">1</HL02>
+      <HL03 ID="00:67">O</HL03>
+    </HL>
+    <PRF ID="68" SegmentPosition="00">
+      <PRF01 ID="00:69">00847006325051</PRF01>
+    </PRF>
+    <REF ID="70" SegmentPosition="00">
+      <REF01 ID="00:71">IV</REF01>
+      <REF02 ID="00:72">00847006325051</REF02>
+    </REF>
+  </HLLoop1>
+  <HLLoop1 ID="73" SegmentPosition="00">
+    <HL ID="74" SegmentPosition="00">
+      <HL01 ID="00:75">3</HL01>
+      <HL02 ID="00:76">2</HL02>
+      <HL03 ID="00:77">P</HL03>
+    </HL>
+    <MAN ID="78" SegmentPosition="00">
+      <MAN01 ID="00:79">CP</MAN01>
+      <MAN02 ID="00:80">00008100059602595556</MAN02>
+    </MAN>
+  </HLLoop1>
+  <HLLoop1 ID="81" SegmentPosition="00">
+    <HL ID="82" SegmentPosition="00">
+      <HL01 ID="00:83">4</HL01>
+      <HL02 ID="00:84">3</HL02>
+      <HL03 ID="00:85">I</HL03>
+    </HL>
+    <LIN ID="86" SegmentPosition="00">
+      <LIN01 ID="00:87">01</LIN01>
+      <LIN02 ID="00:88">VN</LIN02>
+      <LIN03 ID="00:89">476059</LIN03>
+      <LIN04 ID="00:90">SK</LIN04>
+      <LIN05 ID="00:91">1884551</LIN05>
+    </LIN>
+    <SN1 ID="92" SegmentPosition="00">
+      <SN101 ID="00:93" />
+      <SN102 ID="00:94">1</SN102>
+      <SN103 ID="00:95">EA</SN103>
+      <SN104 ID="00:96" />
+      <SN105 ID="00:97" />
+      <SN106 ID="00:98" />
+      <SN107 ID="00:99" />
+      <SN108 ID="00:100">AC</SN108>
+    </SN1>
+    <N1Loop1 ID="101" SegmentPosition="00">
+      <N1 ID="102" SegmentPosition="00">
+        <N101 ID="00:103">WH</N101>
+        <N102 ID="00:104">54</N102>
+        <N103 ID="00:105">Wilson Electronics</N103>
+      </N1>
+    </N1Loop1>
+  </HLLoop1>
+  <CTT ID="106" SegmentPosition="00">
+    <CTT01 ID="00:107">4</CTT01>
+  </CTT>
+  <SE ID="108" SegmentPosition="00">
+    <SE01 ID="00:109">1</SE01>
+    <SE02 ID="00:110">0001</SE02>
+  </SE>
+  <GE ID="111" SegmentPosition="00">
+    <GE01 ID="00:112">3</GE01>
+    <GE02 ID="00:113">9467</GE02>
+  </GE>
+  <IEA ID="114" SegmentPosition="00">
+    <IEA01 ID="00:115">1</IEA01>
+    <IEA02 ID="00:116">175445514</IEA02>
+  </IEA>
+</X12_00401_856>
