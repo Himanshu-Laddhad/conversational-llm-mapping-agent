@@ -8,8 +8,8 @@ then calls the appropriate engine for each active intent.
 
 Currently implemented:   explain  → groq_agent.explain()
                          simulate → simulation_engine.simulate()
-Stubbed (not yet built): generate → xslt_generator.generate()
                          modify   → modification_engine.modify()
+Stubbed (not yet built): generate → xslt_generator.generate()
 
 Usage (as module):
     from modules.dispatcher import dispatch
@@ -48,10 +48,6 @@ _UNBUILT = {
     "generate": (
         "[generate] The Generate engine is not yet implemented. "
         "Planned: xslt_generator.generate() — create a new XSLT from requirements."
-    ),
-    "modify": (
-        "[modify] The Modify engine is not yet implemented. "
-        "Planned: modification_engine.modify() — edit an existing mapping and produce a diff."
     ),
 }
 
@@ -99,11 +95,13 @@ def dispatch(
         from .file_ingestion import ingest_file
         from .groq_agent import explain
         from .simulation_engine import simulate
+        from .modification_engine import modify
     except ImportError:
         from intent_router import route          # fallback for standalone execution
         from file_ingestion import ingest_file
         from groq_agent import explain
         from simulation_engine import simulate
+        from modification_engine import modify
 
     # ── Resolve model (caller > env var > default) ────────────────────────────
     resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -146,6 +144,21 @@ def dispatch(
                 response, _sim_agent = simulate(
                     ingested,
                     source_file=source_file,
+                    api_key=api_key,
+                    model=resolved_model,
+                )
+                responses[intent] = response
+
+        elif intent == "modify":
+            if ingested is None:
+                responses[intent] = (
+                    "[modify] No mapping file provided. "
+                    "Pass file_path pointing to an XSLT/mapping file to modify."
+                )
+            else:
+                response, _mod_agent = modify(
+                    ingested,
+                    modification_request=user_message,
                     api_key=api_key,
                     model=resolved_model,
                 )
