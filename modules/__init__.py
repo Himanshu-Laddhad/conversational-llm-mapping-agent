@@ -1,6 +1,7 @@
 """
 File processing modules for EDI, XML, and XSLT parsing and analysis.
-Includes intent routing and all four engines: explain, simulate, modify, generate.
+Includes intent routing, all four single-file engines (explain, simulate,
+modify, generate), and the RAG multi-file engine (index_folder, query_folder).
 """
 
 from .file_ingestion import ingest_file, UnsupportedFileTypeError
@@ -10,7 +11,8 @@ from .groq_agent import explain
 from .simulation_engine import simulate
 from .modification_engine import modify
 from .xslt_generator import generate
-from .dispatcher import dispatch
+from .rag_engine import index_folder, query_folder
+from .dispatcher import dispatch, dispatch_folder
 
 __all__ = [
     "ingest_file",
@@ -24,5 +26,8 @@ __all__ = [
     "simulate",
     "modify",
     "generate",
+    "index_folder",
+    "query_folder",
     "dispatch",
+    "dispatch_folder",
 ]
