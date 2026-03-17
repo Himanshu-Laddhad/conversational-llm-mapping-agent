@@ -67,13 +67,22 @@ INTENT DEFINITIONS:
              Signals: "run", "test", "simulate", "what happens if", "before and after",
                       "compare", "show output", "validate", "check result", "what would"
 
+  audit    – User wants to AUDIT, REVIEW, or CHECK a mapping for correctness,
+             misconfigurations, risky fields, or production-readiness issues.
+             Signals: "audit", "check", "review", "is this correct", "any issues",
+                      "flag problems", "verify", "safe to use", "production ready",
+                      "what could go wrong", "validate this", "check for errors",
+                      "review this mapping", "is anything wrong"
+
 SCORING RULES:
 - Score each intent from 0.0 (completely absent) to 1.0 (strongly present).
 - Scores are INDEPENDENT — multiple intents can all score high simultaneously.
 - A message like "Explain the BEG segment, then add a DTM segment" scores:
-    explain=0.90, modify=0.85, generate=0.05, simulate=0.10
+    explain=0.90, modify=0.85, generate=0.05, simulate=0.10, audit=0.05
 - "What happens if I remove the N1 loop?" scores:
-    simulate=0.88 (what-if), explain=0.40 (understanding), modify=0.30 (removal implied)
+    simulate=0.88 (what-if), explain=0.40 (understanding), modify=0.30 (removal implied), audit=0.05
+- "Check this mapping for issues before we go live" scores:
+    audit=0.95, explain=0.20, simulate=0.15, modify=0.05, generate=0.0
 - Be precise. Don't inflate scores. 0.0 means the intent is truly absent.
 
 Return ONLY valid JSON, no markdown fences, no extra text:
@@ -82,13 +91,15 @@ Return ONLY valid JSON, no markdown fences, no extra text:
     "explain":  <float 0.0–1.0>,
     "generate": <float 0.0–1.0>,
     "modify":   <float 0.0–1.0>,
-    "simulate": <float 0.0–1.0>
+    "simulate": <float 0.0–1.0>,
+    "audit":    <float 0.0–1.0>
   },
   "reasoning": {
     "explain":  "<one phrase why this score>",
     "generate": "<one phrase why this score>",
     "modify":   "<one phrase why this score>",
-    "simulate": "<one phrase why this score>"
+    "simulate": "<one phrase why this score>",
+    "audit":    "<one phrase why this score>"
   }
 }"""
 
@@ -114,6 +125,11 @@ INTENT_META = {
         "label":       "Simulate / Validate",
         "description": "Run mapping on sample data and show before/after output.",
         "next_module": "simulation_engine.simulate()",
+    },
+    "audit": {
+        "label":       "Audit / Validate",
+        "description": "Scan mapping for misconfigurations and flag risky fields.",
+        "next_module": "audit_engine.audit()",
     },
 }
 
