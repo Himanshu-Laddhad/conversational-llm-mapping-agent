@@ -34,7 +34,7 @@ Usage (standalone test):
 
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 
 # Load .env from module directory or one level up
@@ -56,6 +56,7 @@ def dispatch(
     ingested: Optional[dict] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    session: Optional[Any] = None,
 ) -> dict:
     """
     Route a user message and call the appropriate engine(s).
@@ -70,7 +71,14 @@ def dispatch(
                       file_path is ignored.
         api_key:      Groq API key. Falls back to GROQ_API_KEY env var.
         model:        Groq model used for all LLM calls. Falls back to
-                      GROQ_MODEL env var, then llama-3.1-8b-instant.
+                      GROQ_MODEL env var, then llama-3.3-70b-versatile.
+        session:      Optional Session instance (from modules.session).
+                      When provided:
+                        - file context is reused across turns (no re-parse)
+                        - conversation history is injected into non-explain prompts
+                        - the session is updated in-place after each turn
+                      Pass the same Session object on every subsequent call
+                      to maintain memory across turns.
 
     Returns:
         {
@@ -81,6 +89,10 @@ def dispatch(
           "agent":            Live FileAgent instance if explain was active, else None.
                               Use agent.chat(msg) for follow-up questions.
           "ingested":         The parsed file dict (None if no file was provided).
+          "audit_dict":       Structured audit data dict if the audit intent ran,
+                              else None. Contains "questions", "findings", "summary".
+          "session":          The Session object (same reference as the input session,
+                              updated in-place). None if no session was passed.
         }
 
     Raises:
@@ -107,16 +119,31 @@ def dispatch(
     # ── Resolve model (caller > env var > default) ────────────────────────────
     resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-    # ── 1. Ingest file if a path was given and ingested not already provided ──
+    # ── 1. Ingest file — use session cache if no new file supplied ────────────
     if ingested is None and file_path is not None:
         ingested = ingest_file(file_path=file_path)
+    elif ingested is None and session is not None and session.ingested is not None:
+        ingested = session.ingested   # re-use previously parsed file from session
 
-    # ── 2. Classify user intent ───────────────────────────────────────────────
+    # ── 2. Build context prefix from session history (for non-explain intents) ─
+    _ctx_prefix = ""
+    if session is not None and session.history:
+        ctx = session.get_context_str()
+        if ctx:
+            _ctx_prefix = f"[PRIOR CONTEXT]\n{ctx}\n\n[CURRENT REQUEST]\n"
+
+    # ── 3. Classify user intent ───────────────────────────────────────────────
     route_result = route(user_message, api_key=api_key)
 
-    # ── 3. Dispatch to each active engine in priority order ───────────────────
-    responses: dict[str, str] = {}
+    # ── 4. Dispatch to each active engine in priority order ───────────────────
+    responses: Dict[str, str] = {}
     agent: Any = None
+    audit_dict: Optional[Dict] = None
+
+    # Re-use the existing FileAgent from session if explain was run before,
+    # so the full conversation history inside the agent is preserved.
+    if session is not None and session.agent is not None:
+        agent = session.agent
 
     for intent in route_result["active_intents"]:
 
@@ -126,6 +153,10 @@ def dispatch(
                     "[explain] No file provided. "
                     "Pass a file_path or ingested dict so the agent has something to explain."
                 )
+            elif agent is not None:
+                # Session already has a live FileAgent — continue that conversation
+                response = agent.chat(user_message)
+                responses[intent] = response
             else:
                 response, agent = explain(
                     ingested,
@@ -142,6 +173,7 @@ def dispatch(
                     "Pass file_path pointing to an XSLT/mapping file."
                 )
             else:
+                msg = _ctx_prefix + user_message
                 response, _sim_agent = simulate(
                     ingested,
                     source_file=source_file,
@@ -157,9 +189,10 @@ def dispatch(
                     "Pass file_path pointing to an XSLT/mapping file to modify."
                 )
             else:
+                msg = _ctx_prefix + user_message
                 response, _mod_agent = modify(
                     ingested,
-                    modification_request=user_message,
+                    modification_request=msg,
                     api_key=api_key,
                     model=resolved_model,
                 )
@@ -174,8 +207,9 @@ def dispatch(
                 responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
 
         elif intent == "generate":
+            msg = _ctx_prefix + user_message
             response, _ = generate(
-                generation_request=user_message,
+                generation_request=msg,
                 source_sample=source_file,
                 api_key=api_key,
                 model=resolved_model,
@@ -198,7 +232,7 @@ def dispatch(
                     "Pass file_path pointing to an XSLT/mapping file to audit."
                 )
             else:
-                response, _ = audit(
+                response, audit_dict = audit(
                     ingested,
                     api_key=api_key,
                     model=resolved_model,
@@ -208,12 +242,22 @@ def dispatch(
     primary = route_result["primary"]
     primary_response = responses.get(primary, "")
 
+    # ── 5. Update session with this turn's results ────────────────────────────
+    if session is not None:
+        if ingested is not None:
+            session.ingested = ingested
+        if agent is not None:
+            session.agent = agent
+        session.add_turn(primary, user_message, primary_response)
+
     return {
         "route":            route_result,
         "responses":        responses,
         "primary_response": primary_response,
         "agent":            agent,
         "ingested":         ingested,
+        "audit_dict":       audit_dict,
+        "session":          session,
     }
 
 

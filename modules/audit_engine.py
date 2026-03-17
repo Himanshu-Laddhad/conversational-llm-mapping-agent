@@ -27,54 +27,77 @@ Layer 2 — LLM dynamic checks (Groq, one API call):
     - Cross-field inconsistencies (extended amount ≠ price × qty)
     - Non-obvious mapping decisions a new analyst should verify
 
-Output format
-─────────────
-## AUDIT REPORT
+  The LLM also outputs a structured ``### QUESTIONS_JSON`` block so callers
+  (e.g. a web UI) can render the questions as a fill-in form.
 
-### CRITICAL — must fix before production
-- [SE_COUNT] ...
+Return value
+────────────
+``audit()`` returns ``(prose_report: str, audit_dict: dict)`` where
+``audit_dict`` has the shape::
 
-### WARNINGS — review recommended
-- [ISA_IDS] ...
+    {
+        "questions": [
+            {
+                "id": 1,
+                "question": "Is sender ID 'ACME001' correct for production?",
+                "field":    "ISA06",
+                "severity": "WARNING",
+                "category": "identity",   # identity|numeric|datetime|logic|config
+                "current_value": "ACME001",
+                "answer": None            # filled by the caller / UI
+            },
+            ...
+        ],
+        "findings": [
+            {"rule_id": "SE_COUNT", "severity": "FAIL",
+             "message": "...", "layer": "rule"},
+            ...
+        ],
+        "summary": "1 CRITICAL, 0 WARNINGS, 0 INFO"
+    }
 
-### INFO — for awareness
-- [CURRENCY] ...
+Second-pass audit
+─────────────────
+After the user answers the form questions, call ``audit_followup()`` with
+the filled answers list to get a final verification response::
 
-### DYNAMIC FINDINGS (LLM)
-- [LOGIC] ...
-
-### QUESTIONS FOR YOU
-1. ...
+    answers = [{"id": 1, "question": "...", "answer": "Yes, correct."}]
+    followup_report, _ = audit_followup(ingested, answers)
 
 Token budget (llama-3.3-70b-versatile ~12 000 TPM):
-  System prompt  : ~400 tokens
-  Layer 1 summary: ~200 tokens
-  XSLT content   : ≤ 6 000 chars ≈ 1 500 tokens
-  Output budget  : 1 200 tokens
-  Total          : ~3 300 tokens  ← within 12 000 TPM
+  System prompt       : ~500 tokens
+  Layer 1 summary     : ~200 tokens
+  XSLT content        : ≤ 6 000 chars ≈ 1 500 tokens
+  Output budget       : 1 400 tokens  (extra 200 for JSON block)
+  Total               : ~3 600 tokens  ← within 12 000 TPM
 
 Usage (as module)::
 
-    from modules.audit_engine import audit
+    from modules.audit_engine import audit, audit_followup
     from modules.file_ingestion import ingest_file
 
     ingested = ingest_file("MappingData/.../810_NordStrom_Xslt_11-08-2023.xml")
-    response, _ = audit(ingested)
-    print(response)
+    prose, audit_dict = audit(ingested)
+    print(prose)
+    print(audit_dict["questions"])
 
-    # With extra context (used by auto-audit after modify/generate):
-    response, _ = audit(ingested, context=modify_response)
+    # After user fills in answers:
+    answers = [{"id": q["id"], "question": q["question"], "answer": "Yes"}
+               for q in audit_dict["questions"]]
+    followup, _ = audit_followup(ingested, answers)
+    print(followup)
 
 Usage (standalone CLI)::
 
     python modules/audit_engine.py MappingData/.../810_NordStrom_Xslt_11-08-2023.xml
 """
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -91,8 +114,11 @@ for _candidate in [_here / ".env", _here.parent / ".env"]:
 # Max XSLT chars sent to LLM for dynamic analysis
 _MAX_XSLT_CHARS = 6_000
 
-# Max output tokens for the LLM audit response
-_MAX_OUTPUT_TOKENS = 1_200
+# Max output tokens for the LLM audit response (extra budget for JSON block)
+_MAX_OUTPUT_TOKENS = 1_400
+
+# Max output tokens for the follow-up verification pass
+_MAX_FOLLOWUP_TOKENS = 800
 
 # Valid ISA qualifier codes (ISA05 / ISA07)
 _VALID_ISA_QUALIFIERS = {
@@ -120,12 +146,15 @@ You will receive:
   2. A list of findings already detected by automated rule checks (Layer 1).
 
 Your task: find ADDITIONAL issues that the automated rules missed. Focus on:
-  - Subtle XPath expressions that may cause wrong values (wrong field, division/multiplication errors)
+  - Subtle XPath expressions that may cause wrong values (wrong field, \
+division/multiplication errors, off-by-one)
   - xsl:if / xsl:choose conditions that could silently drop required EDI segments
   - Placeholder or leftover test data the automated rules did not catch
-  - Cross-field inconsistencies (e.g. extended amount does not equal unit price × quantity)
+  - Cross-field inconsistencies (e.g. extended amount does not equal unit price x quantity)
   - Non-obvious mapping decisions a new analyst should verify before production use
   - Any D365 source field paths that look suspicious or are likely incorrect
+  - Sensitive numeric fields (currency amounts, order quantities, unit prices) that may \
+have wrong scale factors (e.g. cents vs dollars, thousands vs units)
 
 Return EXACTLY this format (no preamble, no extra commentary):
 
@@ -137,12 +166,75 @@ Return EXACTLY this format (no preamble, no extra commentary):
 1. <specific yes/no or value-confirmation question for the user>
 (max 6 questions, ordered by severity — most critical first)
 
-If you find no additional issues, write:
+### QUESTIONS_JSON
+```json
+[
+  {
+    "id": 1,
+    "question": "<same question as above>",
+    "field": "<EDI element or XPath field, e.g. ISA06 or IT104>",
+    "severity": "<FAIL|WARNING|INFO>",
+    "category": "<identity|numeric|datetime|logic|config>",
+    "current_value": "<hardcoded or derived value if known, else null>"
+  }
+]
+```
+
+Rules for the JSON block:
+  - id values must be sequential integers starting at 1.
+  - category "identity"  = partner IDs, sender/receiver, company codes
+  - category "numeric"   = amounts, quantities, prices, unit conversions
+  - category "datetime"  = dates, times, timestamps
+  - category "logic"     = XPath conditions, missing fallbacks, segment drops
+  - category "config"    = qualifiers, control numbers, hardcoded codes
+  - Include ALL questions from the prose section — one JSON object each.
+  - If there are no questions, return an empty array: []
+
+If you find no additional issues write:
 ### DYNAMIC FINDINGS (LLM)
 No additional issues found beyond the automated checks.
 
 ### QUESTIONS FOR YOU
 No additional questions.
+
+### QUESTIONS_JSON
+```json
+[]
+```
+"""
+
+_FOLLOWUP_SYSTEM_PROMPT = """\
+You are a senior EDI/XSLT integration analyst reviewing a user's answers to \
+production-readiness questions about an Altova MapForce XSLT 2.0 stylesheet.
+
+You will receive:
+  1. The XSLT source (possibly truncated).
+  2. A list of verification questions that were previously asked.
+  3. The user's answers to those questions.
+
+Your task:
+  - Evaluate each answer and determine if it resolves the concern or reveals a \
+new problem.
+  - Flag any answers that indicate the mapping is NOT safe for production.
+  - Highlight answers that confirm the mapping is correctly configured.
+  - If any answer reveals a new issue not previously identified, flag it clearly.
+
+Return EXACTLY this format:
+
+## VERIFICATION RESULT
+
+### RESOLVED — no action needed
+- <item> (<answer summary>)
+
+### STILL AT RISK — action required
+- <item>: <why the answer does not fully resolve the concern>
+
+### NEW ISSUES from answers
+- <item>: <description>
+
+### OVERALL VERDICT
+<one of: SAFE TO DEPLOY | REVIEW REQUIRED | DO NOT DEPLOY>
+<one sentence justification>
 """
 
 
@@ -413,6 +505,78 @@ def _format_layer1_for_llm(findings: List[Finding]) -> str:
     return "\n".join(lines)
 
 
+# ── JSON question parser ──────────────────────────────────────────────────────
+
+def _parse_questions_json(llm_text: str) -> List[Dict]:
+    """
+    Extract the structured questions JSON array from the LLM response.
+
+    Looks for the ``### QUESTIONS_JSON`` section and the fenced JSON block
+    inside it. Returns an empty list if parsing fails — never raises.
+    """
+    # Split off everything after the QUESTIONS_JSON marker
+    marker = "### QUESTIONS_JSON"
+    idx = llm_text.find(marker)
+    if idx == -1:
+        return []
+
+    tail = llm_text[idx + len(marker):]
+
+    # Find the first ```json ... ``` fence
+    fence_start = tail.find("```json")
+    if fence_start == -1:
+        fence_start = tail.find("```")
+    if fence_start == -1:
+        return []
+
+    # Skip past the opening fence tag
+    content_start = tail.find("\n", fence_start)
+    if content_start == -1:
+        return []
+    content_start += 1
+
+    fence_end = tail.find("```", content_start)
+    if fence_end == -1:
+        json_str = tail[content_start:]
+    else:
+        json_str = tail[content_start:fence_end]
+
+    try:
+        parsed = json.loads(json_str.strip())
+        if isinstance(parsed, list):
+            return parsed
+        return []
+    except (json.JSONDecodeError, ValueError):
+        return []
+
+
+def _build_audit_dict(
+    layer1_findings: List[Finding],
+    structured_questions: List[Dict],
+) -> Dict:
+    """
+    Assemble the structured audit_dict returned as the second element of
+    audit()'s return tuple.
+    """
+    fails    = sum(1 for f in layer1_findings if f.severity == "FAIL")
+    warnings = sum(1 for f in layer1_findings if f.severity == "WARNING")
+    infos    = sum(1 for f in layer1_findings if f.severity == "INFO")
+
+    return {
+        "questions": structured_questions,
+        "findings": [
+            {
+                "rule_id":  f.rule_id,
+                "severity": f.severity,
+                "message":  f.message,
+                "layer":    f.layer,
+            }
+            for f in layer1_findings
+        ],
+        "summary": f"{fails} CRITICAL, {warnings} WARNING, {infos} INFO",
+    }
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def audit(
@@ -420,7 +584,7 @@ def audit(
     context: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-) -> Tuple[str, Any]:
+) -> Tuple[str, Dict]:
     """
     Audit an ingested mapping file for misconfigurations and risky patterns.
 
@@ -433,9 +597,33 @@ def audit(
                    then llama-3.3-70b-versatile.
 
     Returns:
-        (response_str, None) where response_str is the full structured audit
-        report (CRITICAL / WARNINGS / INFO / DYNAMIC FINDINGS / QUESTIONS).
-        The second element is always None (audit is stateless).
+        Tuple of (prose_report: str, audit_dict: dict).
+
+        prose_report — the full human-readable audit report with sections:
+          CRITICAL / WARNINGS / INFO / DYNAMIC FINDINGS / QUESTIONS FOR YOU
+
+        audit_dict — structured data for programmatic use / form rendering::
+
+            {
+                "questions": [
+                    {
+                        "id": 1,
+                        "question": "Is sender ID 'ACME001' correct?",
+                        "field": "ISA06",
+                        "severity": "WARNING",
+                        "category": "identity",
+                        "current_value": "ACME001",
+                        "answer": None
+                    },
+                    ...
+                ],
+                "findings": [
+                    {"rule_id": "SE_COUNT", "severity": "FAIL",
+                     "message": "...", "layer": "rule"},
+                    ...
+                ],
+                "summary": "1 CRITICAL, 0 WARNING, 0 INFO"
+            }
 
     Raises:
         TypeError:  If ingested is not a dict.
@@ -488,7 +676,8 @@ def audit(
 
     user_parts.append(
         "Please perform your dynamic analysis now. "
-        "Return only the DYNAMIC FINDINGS and QUESTIONS sections as specified."
+        "Return the DYNAMIC FINDINGS, QUESTIONS FOR YOU, and QUESTIONS_JSON "
+        "sections exactly as specified in the system prompt."
     )
 
     user_message = "\n".join(user_parts)
@@ -504,18 +693,123 @@ def audit(
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
 
-    llm_section = response.choices[0].message.content.strip()
+    llm_full = response.choices[0].message.content.strip()
 
-    # ── Assemble final report ─────────────────────────────────────────────────
+    # Strip the QUESTIONS_JSON block from the displayed prose report
+    questions_marker = "### QUESTIONS_JSON"
+    json_idx = llm_full.find(questions_marker)
+    llm_prose = llm_full[:json_idx].strip() if json_idx != -1 else llm_full
+
+    # Parse the structured questions for the audit_dict
+    structured_questions = _parse_questions_json(llm_full)
+
+    # ── Assemble final prose report ───────────────────────────────────────────
     report_parts = [
         f"## AUDIT REPORT\nFile: {file_name}  |  Type: {file_type}",
         "",
         layer1_report,
         "",
-        llm_section,
+        llm_prose,
     ]
 
-    return "\n".join(report_parts).strip(), None
+    prose_report = "\n".join(report_parts).strip()
+    audit_dict   = _build_audit_dict(layer1_findings, structured_questions)
+
+    return prose_report, audit_dict
+
+
+def audit_followup(
+    ingested: dict,
+    answers: List[Dict],
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Tuple[str, None]:
+    """
+    Second-pass audit: verify the user's answers to the structured questions
+    and produce a final SAFE TO DEPLOY / REVIEW REQUIRED / DO NOT DEPLOY verdict.
+
+    Args:
+        ingested: Output dict from file_ingestion.ingest_file().
+        answers:  List of answer dicts — each must have keys:
+                    "id"       (int)   — matches the question id from audit()
+                    "question" (str)   — the original question text
+                    "answer"   (str)   — the user's answer
+        api_key:  Groq API key. Falls back to GROQ_API_KEY env var.
+        model:    Groq model. Falls back to GROQ_MODEL env var.
+
+    Returns:
+        (verification_report: str, None)
+
+        verification_report has sections:
+          RESOLVED / STILL AT RISK / NEW ISSUES / OVERALL VERDICT
+
+    Raises:
+        TypeError:  If ingested is not a dict or answers is not a list.
+        ValueError: If no API key found.
+
+    Example::
+
+        prose, audit_dict = audit(ingested)
+        answers = [
+            {"id": q["id"], "question": q["question"], "answer": "Yes, correct."}
+            for q in audit_dict["questions"]
+        ]
+        followup, _ = audit_followup(ingested, answers)
+        print(followup)
+    """
+    if not isinstance(ingested, dict):
+        raise TypeError(f"ingested must be a dict, got {type(ingested).__name__}")
+    if not isinstance(answers, list):
+        raise TypeError(f"answers must be a list, got {type(answers).__name__}")
+
+    key = api_key or os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise ValueError(
+            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
+        )
+
+    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+    meta      = ingested.get("metadata", {})
+    parsed    = ingested.get("parsed_content", {})
+    file_name = meta.get("filename", "unknown")
+
+    # Build answer summary for prompt
+    if not answers:
+        answers_text = "No answers provided."
+    else:
+        lines = []
+        for a in answers:
+            qid  = a.get("id", "?")
+            q    = a.get("question", "")
+            ans  = a.get("answer", "")
+            lines.append(f"Q{qid}: {q}\nA{qid}: {ans}")
+        answers_text = "\n\n".join(lines)
+
+    # Truncated XSLT for context
+    raw_xslt = parsed.get("raw_xml", "") or parsed.get("raw_text", "") or ""
+    if len(raw_xslt) > 4_000:
+        raw_xslt = raw_xslt[:4_000] + "\n... [truncated]"
+
+    user_message = (
+        f"## Mapping File\nName: {file_name}\n\n"
+        + (f"## XSLT Source\n```xml\n{raw_xslt}\n```\n\n" if raw_xslt else "")
+        + f"## User Answers to Verification Questions\n{answers_text}\n\n"
+        + "Please evaluate these answers and return the VERIFICATION RESULT as specified."
+    )
+
+    client = Groq(api_key=key)
+    response = client.chat.completions.create(
+        model=resolved_model,
+        messages=[
+            {"role": "system", "content": _FOLLOWUP_SYSTEM_PROMPT},
+            {"role": "user",   "content": user_message},
+        ],
+        temperature=0.1,
+        max_tokens=_MAX_FOLLOWUP_TOKENS,
+    )
+
+    return response.choices[0].message.content.strip(), None
 
 
 # ── CLI harness ───────────────────────────────────────────────────────────────
@@ -550,8 +844,14 @@ if __name__ == "__main__":
     print()
     print("[AUDIT ] Running...\n")
 
-    response, _ = audit(ingested)
+    prose, audit_dict = audit(ingested)
 
     print("=" * 80)
-    print(response)
-    print("=" * 80 + "\n")
+    print(prose)
+    print("=" * 80)
+    print()
+    print(f"[SUMMARY ] {audit_dict['summary']}")
+    print(f"[QUESTIONS] {len(audit_dict['questions'])} structured question(s)")
+    for q in audit_dict["questions"]:
+        print(f"  Q{q['id']} [{q['severity']}][{q['category']}] {q['question']}")
+    print()
