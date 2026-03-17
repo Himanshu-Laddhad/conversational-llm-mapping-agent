@@ -230,3 +230,15 @@ celerybeat.pid
 # Large sample/test data folder — kept locally but not tracked by git.
 # OneDrive holds file locks on these folders which breaks git checkout.
 MappingData/
+
+# ── data/ — user mapping files ─────────────────────────────────────────────────
+# Drop your XSLT / XML / XSD / EDI files here and run scripts/index_data.py.
+# Contents are never committed (files may be large or proprietary).
+# The folder itself (.gitkeep) IS committed so it exists after git clone.
+data/*
+!data/.gitkeep
+
+# ── RAG vector index ───────────────────────────────────────────────────────────
+# Built locally by scripts/index_data.py — never committed.
+# Each machine builds its own index; re-run the script after adding new files.
+.rag_index/

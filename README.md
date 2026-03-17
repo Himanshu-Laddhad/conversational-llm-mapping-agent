@@ -72,5 +72,119 @@ Once you have pushed your branch to GitHub, you need to ask the team to review a
 5. **Merge:** Once approved, click the **Merge pull request** button on GitHub.
 6. **Clean up:** Delete your feature branch on GitHub, go back to your terminal, and run `git checkout main` followed by `git pull origin main` to sync your computer up with your newly merged code!
 
+---
+
+## AI Agent — Setup & Usage
+
+The `modules/` folder contains a **Conversational Mapping Intelligence Agent** that can explain, audit, simulate, modify, and generate EDI/XML/XSLT mappings using an LLM (Groq).
+
+### Step 1 — Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Step 2 — Configure your API key
+
+Copy the example env file and add your Groq API key:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set:
+
+```
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+Get a free key at https://console.groq.com
+
+### Step 3 — Add your mapping files
+
+Copy your XSLT / XML / XSD / EDI mapping files into the `data/` folder (any sub-folder structure is fine):
+
+```
+data/
+├── 810_Invoice/
+│   └── 810_NordStrom_Xslt.xml
+├── 850_PO/
+│   └── Graybar_850_XSLT.xml
+└── your_mapping.xslt
+```
+
+### Step 4 — Build the RAG index
+
+Run this once after adding files. Re-run whenever you add new files.
+
+```bash
+python scripts/index_data.py
+```
+
+To force a full rebuild from scratch:
+
+```bash
+python scripts/index_data.py --force
+```
+
+### Step 5 — Use the agent
+
+**Single-file question (any of the 5 intents):**
+
+```python
+from modules.dispatcher import dispatch
+
+result = dispatch(
+    user_message="Explain what this XSLT does.",
+    file_path="data/810_Invoice/810_NordStrom_Xslt.xml",
+)
+print(result["primary_response"])
+```
+
+**Audit a mapping for production issues:**
+
+```python
+result = dispatch(
+    user_message="Audit this mapping and flag any issues before go-live.",
+    file_path="data/810_Invoice/810_NordStrom_Xslt.xml",
+)
+prose = result["primary_response"]
+questions = result["audit_dict"]["questions"]   # structured form questions
+print(prose)
+```
+
+**Cross-file questions across the whole data/ folder (RAG):**
+
+```python
+from modules.dispatcher import dispatch_folder
+
+result = dispatch_folder(
+    user_message="Which mappings handle 810 invoices?",
+    folder_path="data",
+)
+print(result["primary_response"])
+```
+
+**Multi-turn session (all intents share memory):**
+
+```python
+from modules.session import Session
+from modules.dispatcher import dispatch
+
+session = Session()
+
+r1 = dispatch("Explain this mapping.", file_path="data/810_Invoice/810_NordStrom_Xslt.xml", session=session)
+r2 = dispatch("Now audit it.", session=session)          # file remembered from r1
+r3 = dispatch("Modify the sender ID to PROD001.", session=session)
+```
+
+### Supported file types
+
+| Extension | Format |
+|-----------|--------|
+| `.xml` / `.xsl` / `.xslt` | Altova MapForce XSLT stylesheets |
+| `.xsd` | XML Schema definitions |
+| `.edi` / `.txt` | X12 EDI / EDIFACT interchange files |
+
 ```
 
