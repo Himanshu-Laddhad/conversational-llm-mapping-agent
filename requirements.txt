@@ -27,6 +27,10 @@ chromadb>=0.6.0
 # Local sentence embedding model (all-MiniLM-L6-v2, ~80 MB) — no API key needed
 sentence-transformers>=3.0.0
 
+# ── Frontend ───────────────────────────────────────────────────────────────────
+# Streamlit web UI — file upload, chat interface, audit form, RAG tab
+streamlit>=1.32.0
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Version Constraints Explanation:
 # ~= (compatible release): Allows patch-level changes (e.g., ~=1.0.0 allows 1.0.x)

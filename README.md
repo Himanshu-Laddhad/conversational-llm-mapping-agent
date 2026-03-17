@@ -188,3 +188,25 @@ r3 = dispatch("Modify the sender ID to PROD001.", session=session)
 
 ```
 
+---
+
+## Running the Web UI
+
+Make sure all dependencies are installed, then launch the Streamlit app:
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Open **http://localhost:8501** in your browser.
+
+### UI overview
+
+| Area | What it does |
+|------|-------------|
+| **Sidebar** | Upload a mapping file (`.xml .xsl .xslt .xsd .edi .txt`), start a new session, inspect debug routing scores |
+| **Tab 1 — Chat** | Conversational AI over a single uploaded file — all five intents (explain / simulate / modify / generate / audit) with session memory |
+| **Audit Form** | Auto-appears after an `audit` intent; fill in the verification questions and submit for a second-pass `SAFE / REVIEW / DO NOT DEPLOY` verdict |
+| **Tab 2 — RAG Search** | Cross-file question answering over every file in `data/` (index must be built first with `python scripts/index_data.py`) |
+
