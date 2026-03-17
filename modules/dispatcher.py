@@ -3,8 +3,16 @@ dispatcher.py
 ─────────────
 Central dispatch engine for the Conversational Mapping Intelligence Agent.
 
-Accepts a user message and an optional file, routes intent via intent_router,
-then calls the appropriate engine for each active intent.
+Accepts a user message and one or more optional files, routes intent via
+intent_router, then calls the appropriate engine for each active intent.
+
+Supports multi-file sessions: pass file_paths=[...] to ingest several files
+in one call. The session tracks all uploaded files and picks the most relevant
+one per turn via session.get_primary_ingested(user_message).
+
+Auto-RAG: if a .rag_index/ directory exists alongside this project, the
+dispatcher automatically queries it and prepends relevant context snippets to
+all engine prompts (non-fatal if the index is missing or query fails).
 
 Currently implemented:   explain  → groq_agent.explain()
                          simulate → simulation_engine.simulate()
@@ -22,10 +30,12 @@ Usage (as module):
     )
     print(result["primary_response"])
 
-    # Continue the conversation if explain ran
-    if result["agent"]:
-        follow_up = result["agent"].chat("What are the hardcoded values?")
-        print(follow_up)
+    # Multi-file upload
+    result = dispatch(
+        user_message="Compare these two mappings.",
+        file_paths=["path/to/810.xml", "path/to/850.xml"],
+        session=session,
+    )
 
 Usage (standalone test):
     python modules/dispatcher.py
@@ -34,7 +44,7 @@ Usage (standalone test):
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
 # Load .env from module directory or one level up
@@ -52,6 +62,7 @@ _UNBUILT: dict = {}   # all four engines are now implemented
 def dispatch(
     user_message: str,
     file_path: Optional[str] = None,
+    file_paths: Optional[List[str]] = None,
     source_file: Optional[str] = None,
     ingested: Optional[dict] = None,
     api_key: Optional[str] = None,
@@ -63,41 +74,41 @@ def dispatch(
 
     Args:
         user_message: The user's natural language request.
-        file_path:    Path to a mapping file (XSLT/XSD/XML) to parse.
-                      Ignored if ingested is already provided.
-        source_file:  Path to the source/input data file for simulate intent
-                      (e.g. a D365 XML SourceFile.txt from MappingData).
+        file_path:    Path to a single mapping file (XSLT/XSD/XML) to parse.
+                      Kept for backward compatibility. Prefer file_paths.
+        file_paths:   List of paths to mapping files to ingest this turn.
+                      All files are added to session.ingested_files. The most
+                      recently ingested one becomes the primary for this turn.
+        source_file:  Path to the source/input data file for simulate intent.
         ingested:     Pre-parsed dict from ingest_file(). If provided,
-                      file_path is ignored.
+                      file_path and file_paths are ignored.
         api_key:      Groq API key. Falls back to GROQ_API_KEY env var.
         model:        Groq model used for all LLM calls. Falls back to
                       GROQ_MODEL env var, then llama-3.3-70b-versatile.
         session:      Optional Session instance (from modules.session).
                       When provided:
-                        - file context is reused across turns (no re-parse)
-                        - conversation history is injected into non-explain prompts
-                        - the session is updated in-place after each turn
+                        - all uploaded files are tracked across turns
+                        - the most relevant file is selected per turn
+                        - conversation history is injected into prompts
+                        - RAG context is auto-injected from .rag_index/ if present
                       Pass the same Session object on every subsequent call
                       to maintain memory across turns.
 
     Returns:
         {
-          "route":            Full route() result (scores, reasoning, active_intents,
-                              primary, is_multi, threshold_used).
-          "responses":        Dict of { intent: response_str } for each active intent.
-          "primary_response": Response string from the primary (highest-scoring) intent.
-          "agent":            Live FileAgent instance if explain was active, else None.
-                              Use agent.chat(msg) for follow-up questions.
-          "ingested":         The parsed file dict (None if no file was provided).
-          "audit_dict":       Structured audit data dict if the audit intent ran,
-                              else None. Contains "questions", "findings", "summary".
-          "session":          The Session object (same reference as the input session,
-                              updated in-place). None if no session was passed.
+          "route":              Full route() result (scores, active_intents, etc.)
+          "responses":          Dict of { intent: response_str }.
+          "primary_response":   Response string from the primary intent.
+          "agent":              Live FileAgent instance if explain was active.
+          "ingested":           The primary parsed file dict for this turn.
+          "audit_dict":         Structured audit data dict if audit ran, else None.
+          "session":            The Session object (updated in-place).
+          "primary_file_name":  Filename of the file used this turn (str or "").
         }
 
     Raises:
         ValueError: If no Groq API key is available.
-        FileNotFoundError: If file_path is given but does not exist.
+        FileNotFoundError: If a provided file path does not exist.
     """
     try:
         from .intent_router import route
@@ -107,6 +118,7 @@ def dispatch(
         from .modification_engine import modify
         from .xslt_generator import generate
         from .audit_engine import audit
+        from .rag_engine import query_folder
     except ImportError:
         from intent_router import route          # fallback for standalone execution
         from file_ingestion import ingest_file
@@ -115,27 +127,58 @@ def dispatch(
         from modification_engine import modify
         from xslt_generator import generate
         from audit_engine import audit           # type: ignore
+        from rag_engine import query_folder      # type: ignore
 
     # ── Resolve model (caller > env var > default) ────────────────────────────
     resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-    # ── 1. Ingest file — use session cache if no new file supplied ────────────
-    if ingested is None and file_path is not None:
-        ingested = ingest_file(file_path=file_path)
-    elif ingested is None and session is not None and session.ingested is not None:
-        ingested = session.ingested   # re-use previously parsed file from session
+    # ── 1. Ingest new files ───────────────────────────────────────────────────
+    # Merge legacy file_path with new file_paths list, deduplicate
+    _all_new_paths: List[str] = list(file_paths or [])
+    if file_path and file_path not in _all_new_paths:
+        _all_new_paths.append(file_path)
 
-    # ── 2. Build context prefix from session history (for non-explain intents) ─
+    if ingested is None:
+        for p in _all_new_paths:
+            _new = ingest_file(file_path=p)
+            if session is not None:
+                session.add_file(_new)
+            ingested = _new   # last ingested = primary for this turn
+
+    # Fall back to session's most-relevant file when no new files uploaded
+    if ingested is None and session is not None:
+        ingested = session.get_primary_ingested(user_message)
+
+    # ── 2. Build context prefix from session history ──────────────────────────
     _ctx_prefix = ""
     if session is not None and session.history:
         ctx = session.get_context_str()
         if ctx:
             _ctx_prefix = f"[PRIOR CONTEXT]\n{ctx}\n\n[CURRENT REQUEST]\n"
 
-    # ── 3. Classify user intent ───────────────────────────────────────────────
+    # ── 3. Auto-inject RAG context if index exists ────────────────────────────
+    _index_dir = Path(__file__).resolve().parent.parent / ".rag_index"
+    if _index_dir.exists():
+        try:
+            _rag_text, _ = query_folder(
+                question=user_message,
+                persist_dir=str(_index_dir),
+                top_k=3,
+                api_key=api_key,
+                model=resolved_model,
+            )
+            if _rag_text and "[no results]" not in _rag_text.lower():
+                _ctx_prefix = (
+                    f"[REFERENCE CONTEXT FROM SIMILAR MAPPINGS]\n{_rag_text}\n\n"
+                    + _ctx_prefix
+                )
+        except Exception:
+            pass   # RAG failure is non-fatal — continue without it
+
+    # ── 4. Classify user intent ───────────────────────────────────────────────
     route_result = route(user_message, api_key=api_key)
 
-    # ── 4. Dispatch to each active engine in priority order ───────────────────
+    # ── 5. Dispatch to each active engine in priority order ───────────────────
     responses: Dict[str, str] = {}
     agent: Any = None
     audit_dict: Optional[Dict] = None
@@ -242,22 +285,30 @@ def dispatch(
     primary = route_result["primary"]
     primary_response = responses.get(primary, "")
 
-    # ── 5. Update session with this turn's results ────────────────────────────
+    # ── 6. Update session with this turn's results ────────────────────────────
     if session is not None:
-        if ingested is not None:
-            session.ingested = ingested
+        # ingested is already registered via session.add_file() above for new
+        # files; only update the primary alias here for files loaded via the
+        # legacy ingested= kwarg path (which bypasses add_file).
+        if ingested is not None and ingested not in session.ingested_files:
+            session.add_file(ingested)
         if agent is not None:
             session.agent = agent
         session.add_turn(primary, user_message, primary_response)
 
+    _primary_file_name = (
+        ingested.get("metadata", {}).get("filename", "") if ingested else ""
+    )
+
     return {
-        "route":            route_result,
-        "responses":        responses,
-        "primary_response": primary_response,
-        "agent":            agent,
-        "ingested":         ingested,
-        "audit_dict":       audit_dict,
-        "session":          session,
+        "route":              route_result,
+        "responses":          responses,
+        "primary_response":   primary_response,
+        "agent":              agent,
+        "ingested":           ingested,
+        "audit_dict":         audit_dict,
+        "session":            session,
+        "primary_file_name":  _primary_file_name,
     }
 
 

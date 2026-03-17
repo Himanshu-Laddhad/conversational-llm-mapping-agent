@@ -5,6 +5,10 @@ In-memory session object that gives all five intents (explain, simulate,
 modify, generate, audit) shared conversation memory and file context across
 multiple dispatch() calls.
 
+Supports multi-file sessions: any number of files can be added at any point
+via add_file(). The session picks the most relevant file per turn using
+get_primary_ingested().
+
 Usage::
 
     from modules.session import Session
@@ -20,28 +24,26 @@ Usage::
     )
     print(result["primary_response"])
 
-    # Second turn — file context and prior conversation are remembered
+    # Second turn — add another file mid-conversation
     result = dispatch(
-        user_message="Now audit it for production issues.",
-        session=session,  # no file_path needed — session remembers it
-    )
-    print(result["primary_response"])
-
-    # Third turn — context from both previous turns is injected
-    result = dispatch(
-        user_message="Modify the sender ID to PROD_SENDER_01.",
+        user_message="Now compare this 850 PO mapping.",
+        file_path="MappingData/.../850_Graybar_XSLT.xml",
         session=session,
+    )
+
+    # Third turn — session picks the most relevant file automatically
+    result = dispatch(
+        user_message="Audit the NordStrom invoice mapping.",
+        session=session,  # no file_path needed — session remembers all files
     )
 
 Session internals
 ─────────────────
-- ingested:   The last parsed file dict (set by dispatcher after ingest).
-- agent:      The live FileAgent instance (explain intent only). Reused across
-              turns so the full explain conversation history is preserved.
-- history:    List of {"intent", "user", "assistant"} dicts, one per turn.
-              Used by get_context_str() to build a compact context prefix that
-              is injected into non-explain engine prompts.
-- session_id: Short random hex ID for logging/debugging.
+- ingested_files: All parsed file dicts added this session (via add_file).
+- ingested:       Alias for the most recently added file (backward compat).
+- agent:          Live FileAgent instance (explain intent only).
+- history:        List of {"intent", "user", "assistant"} dicts, one per turn.
+- session_id:     Short random hex ID for logging/debugging.
 
 All state is in-memory only — no disk persistence required.
 """
@@ -59,19 +61,26 @@ class Session:
     Create one instance per user conversation and pass it to every
     dispatch() call. The dispatcher reads from and writes to it in-place,
     so you always get the most up-to-date context without manual bookkeeping.
+
+    Multiple files can be added at any point via add_file(). Use
+    get_primary_ingested(user_message) to retrieve the most relevant file
+    for a given turn (keyword match against filenames, fallback to last added).
     """
 
     session_id: str = field(
         default_factory=lambda: uuid.uuid4().hex[:8]
     )
 
-    # The most recently parsed file dict (from file_ingestion.ingest_file).
-    # Re-used as the file context for subsequent turns that don't supply
-    # a new file_path.
+    # All files ingested this session. Each entry is an ingest_file() dict.
+    ingested_files: List[dict] = field(default_factory=list)
+
+    # Alias: most recently added file dict (kept for backward compatibility
+    # with code that reads session.ingested directly).
     ingested: Optional[dict] = None
 
     # Live FileAgent instance — only populated when the explain intent has run.
-    # Preserved across turns so the full multi-turn explain conversation is kept.
+    # Reset when a new file is added so the agent is always tied to the current
+    # primary file.
     agent: Optional[Any] = None
 
     # Full turn history: list of dicts with keys intent / user / assistant.
@@ -83,9 +92,53 @@ class Session:
 
     # ── Public helpers ────────────────────────────────────────────────────────
 
+    def add_file(self, ingested_dict: dict) -> None:
+        """
+        Register a newly ingested file in the session.
+
+        The file is appended to ingested_files and becomes the new primary
+        (session.ingested). The explain agent is reset because it is tied to
+        a single file; it will be re-created on the next explain turn.
+        """
+        self.ingested_files.append(ingested_dict)
+        self.ingested = ingested_dict
+        self.agent    = None   # explain agent is file-specific — reset it
+
+    def get_primary_ingested(self, user_message: str = "") -> Optional[dict]:
+        """
+        Return the most relevant ingested file for the given user message.
+
+        Strategy:
+          1. If no files, return None.
+          2. If only one file or no message, return the last added file.
+          3. Score each file by counting how many underscore-separated tokens
+             from its filename appear in the (lowercased) user message.
+             Return the highest-scoring file; break ties by recency.
+
+        This lets users reference files by name naturally, e.g.
+        "audit the NordStrom mapping" → picks 810_NordStrom_Xslt.xml.
+        """
+        if not self.ingested_files:
+            return None
+        if len(self.ingested_files) == 1 or not user_message:
+            return self.ingested_files[-1]
+
+        msg_lower = user_message.lower()
+        best       = self.ingested_files[-1]
+        best_score = 0
+
+        for f in self.ingested_files:
+            fname = f.get("metadata", {}).get("filename", "")
+            # Split on common separators and score word matches
+            tokens = [t for t in fname.lower().replace("-", "_").split("_") if len(t) > 2]
+            score  = sum(1 for t in tokens if t in msg_lower)
+            if score > best_score:
+                best, best_score = f, score
+
+        return best
+
     def add_turn(self, intent: str, user_msg: str, response: str) -> None:
         """Record one completed dispatch turn in the history."""
-        # Truncate stored response to avoid unbounded growth
         _MAX_STORED = 1_500
         stored_response = (
             response[:_MAX_STORED] + " …[truncated]"
@@ -120,7 +173,6 @@ class Session:
                 f"Assistant: {turn['assistant']}\n"
             )
             if len(snippet) > budget:
-                # Partial inclusion to use remaining budget
                 snippet = snippet[:budget] + " …"
                 segments.append(snippet)
                 break
@@ -134,17 +186,18 @@ class Session:
 
     def reset(self) -> None:
         """Clear all session state (keeps session_id and config unchanged)."""
-        self.ingested = None
-        self.agent    = None
-        self.history  = []
+        self.ingested_files = []
+        self.ingested       = None
+        self.agent          = None
+        self.history        = []
 
     # ── Dunder helpers ────────────────────────────────────────────────────────
 
     def __repr__(self) -> str:
         n_turns   = len(self.history)
-        has_file  = self.ingested is not None
-        has_agent = self.agent    is not None
+        n_files   = len(self.ingested_files)
+        has_agent = self.agent is not None
         return (
             f"Session(id={self.session_id!r}, turns={n_turns}, "
-            f"file={has_file}, agent={has_agent})"
+            f"files={n_files}, agent={has_agent})"
         )
