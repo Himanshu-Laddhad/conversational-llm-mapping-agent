@@ -10,6 +10,7 @@ Currently implemented:   explain  → groq_agent.explain()
                          simulate → simulation_engine.simulate()
                          modify   → modification_engine.modify()
                          generate → xslt_generator.generate()
+                         audit    → audit_engine.audit()
                          folder   → rag_engine.index_folder() + query_folder()
 
 Usage (as module):
@@ -93,6 +94,7 @@ def dispatch(
         from .simulation_engine import simulate
         from .modification_engine import modify
         from .xslt_generator import generate
+        from .audit_engine import audit
     except ImportError:
         from intent_router import route          # fallback for standalone execution
         from file_ingestion import ingest_file
@@ -100,6 +102,7 @@ def dispatch(
         from simulation_engine import simulate
         from modification_engine import modify
         from xslt_generator import generate
+        from audit_engine import audit           # type: ignore
 
     # ── Resolve model (caller > env var > default) ────────────────────────────
     resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -161,6 +164,14 @@ def dispatch(
                     model=resolved_model,
                 )
                 responses[intent] = response
+                # Auto-audit: append audit findings to the proposed modification
+                _audit_resp, _ = audit(
+                    ingested,
+                    context=response,
+                    api_key=api_key,
+                    model=resolved_model,
+                )
+                responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
 
         elif intent == "generate":
             response, _ = generate(
@@ -170,6 +181,29 @@ def dispatch(
                 model=resolved_model,
             )
             responses[intent] = response
+            # Auto-audit: append audit findings to the generated XSLT
+            if ingested is not None:
+                _audit_resp, _ = audit(
+                    ingested,
+                    context=response,
+                    api_key=api_key,
+                    model=resolved_model,
+                )
+                responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
+
+        elif intent == "audit":
+            if ingested is None:
+                responses[intent] = (
+                    "[audit] No mapping file provided. "
+                    "Pass file_path pointing to an XSLT/mapping file to audit."
+                )
+            else:
+                response, _ = audit(
+                    ingested,
+                    api_key=api_key,
+                    model=resolved_model,
+                )
+                responses[intent] = response
 
     primary = route_result["primary"]
     primary_response = responses.get(primary, "")
