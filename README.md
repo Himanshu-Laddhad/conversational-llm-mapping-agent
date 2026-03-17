@@ -1,4 +1,3 @@
-```markdown
 # Industry-Practicum_PartnerLinQ
 
 Hey team, I have created this repo to add our codes and other information so that we can all access and keep a check on the project flow. 
@@ -186,7 +185,6 @@ r3 = dispatch("Modify the sender ID to PROD001.", session=session)
 | `.xsd` | XML Schema definitions |
 | `.edi` / `.txt` | X12 EDI / EDIFACT interchange files |
 
-```
 
 ---
 
@@ -205,8 +203,9 @@ Open **http://localhost:8501** in your browser.
 
 | Area | What it does |
 |------|-------------|
-| **Sidebar** | Upload a mapping file (`.xml .xsl .xslt .xsd .edi .txt`), start a new session, inspect debug routing scores |
-| **Tab 1 — Chat** | Conversational AI over a single uploaded file — all five intents (explain / simulate / modify / generate / audit) with session memory |
-| **Audit Form** | Auto-appears after an `audit` intent; fill in the verification questions and submit for a second-pass `SAFE / REVIEW / DO NOT DEPLOY` verdict |
-| **Tab 2 — RAG Search** | Cross-file question answering over every file in `data/` (index must be built first with `python scripts/index_data.py`) |
+| **Sidebar — Upload Files** | Upload one or more mapping files at any point (`.xml .xsl .xslt .xsd .edi .txt`). All files stay active for the session; remove individual files with the ✕ button. |
+| **Sidebar — RAG Index** | Shows how many files are indexed in `data/` and lets you re-index without leaving the app. |
+| **Chat** | Single unified chat — all five intents (explain / simulate / modify / generate / audit) work across all uploaded files. The agent picks the most relevant file per turn and auto-injects context from the RAG index. |
+| **Audit Form** | Auto-appears after an `audit` intent; fill in the verification questions and submit for a second-pass `SAFE / REVIEW / DO NOT DEPLOY` verdict. |
+| **New Session** | Clears conversation history, all uploaded files, and the audit form. |
 
