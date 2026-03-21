@@ -1,0 +1,128 @@
+%% PartnerLinQ — Conversational Mapping Intelligence Agent
+%% Updated architecture reflecting: unified chat, multi-file sessions, auto-RAG, audit engine
+
+flowchart TB
+    subgraph USER["USER & INTERFACE"]
+        U[["👤 User<br/>Business or IT stakeholder"]]
+        UI[["🖥️ Streamlit UI<br/>app.py<br/>Chat, multi-file upload, output panel, audit form"]]
+    end
+
+    subgraph PARTNERLINQ["PARTNERLINQ DATA"]
+        PD[["📁 Partner Data<br/>data/ — XSLT, XML, XSD, EDI mappings"]]
+        RAG[["🔍 .rag_index/<br/>ChromaDB vector store<br/>Built via scripts/index_data.py"]]
+    end
+
+    subgraph CORE["CORE"]
+        IR[["🧭 Intent Router<br/>Classifies: explain, simulate, modify, generate, audit"]]
+        FI[["📥 File Ingestion<br/>Parses mappings per file type"]]
+        CB[["🧩 Context Builder<br/>Session history + RAG snippets + file context"]]
+        DISP[["⚙️ Dispatcher<br/>Central orchestration hub"]]
+    end
+
+    subgraph CAPABILITY["CAPABILITY"]
+        EXP[["📋 Explain<br/>Translate mapping logic to plain language"]]
+        SIM[["▶️ Simulate<br/>Preview before/after transformation impact"]]
+        MOD[["✏️ Modify<br/>Edit rules with LLM-assisted changes"]]
+        GEN[["🔧 Generate<br/>Create new XSLT/mappings from specs"]]
+        AUD[["✅ Audit<br/>Production readiness checks + verification form"]]
+    end
+
+    subgraph GOVERNANCE["GOVERNANCE & STORAGE"]
+        SESS[["💾 Session<br/>Conversation memory, ingested_files, turn history"]]
+        AUDV[["📋 Audit & Verification<br/>Structured questions, SAFE/REVIEW/DO NOT DEPLOY verdict"]]
+    end
+
+    %% User flow
+    U --> UI
+    UI -->|"user message, file_paths"| IR
+    UI -->|"uploaded files"| FI
+
+    %% Partner data feeds
+    PD --> CB
+    PD --> FI
+    RAG -->|"query_folder"| CB
+
+    %% Core flow
+    FI -->|"ingested dict"| CB
+    CB -->|"context prefix"| DISP
+    IR -->|"active_intents"| DISP
+    FI -->|"ingested"| DISP
+
+    %% Dispatcher orchestrates capabilities
+    DISP --> EXP
+    DISP --> SIM
+    DISP --> MOD
+    DISP --> GEN
+    DISP --> AUD
+
+    %% Session ties it all together
+    SESS --> CB
+    DISP --> SESS
+    FI --> SESS
+
+    %% Capability outputs to UI
+    EXP --> UI
+    SIM --> UI
+    MOD --> UI
+    GEN --> UI
+    AUD --> UI
+
+    %% Modify & Generate auto-trigger Audit
+    MOD -.->|"auto-audit"| AUD
+    GEN -.->|"auto-audit"| AUD
+
+    %% Audit produces verification form → user answers → audit_followup
+    AUD --> AUDV
+    AUDV -->|"verdict"| UI
+
+---
+%% Request workflow — what happens when a user sends a message
+
+flowchart LR
+    subgraph REQUEST["1. Request"]
+        A[["User message + file_paths"]]
+    end
+
+    subgraph INGEST["2. Ingest"]
+        B[["File Ingestion"]]
+        C[["Session.add_file"]]
+    end
+
+    subgraph CONTEXT["3. Build context"]
+        D[["Session history"]]
+        E[["RAG query_folder"]]
+        F[["_ctx_prefix"]]
+    end
+
+    subgraph ROUTE["4. Route"]
+        G[["Intent Router"]]
+        H[["active_intents"]]
+    end
+
+    subgraph EXEC["5. Execute"]
+        I[["Dispatcher"]]
+        J[["Engine(s)"]]
+        K[["Auto-audit if modify/generate"]]
+    end
+
+    subgraph RESPOND["6. Respond"]
+        L[["primary_response"]]
+        M[["audit_dict if audit"]]
+        N[["Session.add_turn"]]
+    end
+
+    A --> B
+    B --> C
+    C --> D
+    E --> F
+    D --> F
+    A --> G
+    G --> H
+    F --> I
+    H --> I
+    B --> I
+    I --> J
+    J --> K
+    K --> L
+    L --> M
+    M --> N
