@@ -539,67 +539,265 @@ def parse_xml(raw_text: str) -> dict:
 def parse_xslt(raw_text: str) -> dict:
     """
     Parse XSLT file using lxml.
-    
-    Returns structured information about the XSLT stylesheet.
+
+    Returns rich structured information about the stylesheet including:
+    - Template call graph (xsl:call-template chains)
+    - Apply-templates flows (xsl:apply-templates with select/mode)
+    - Variable and parameter dependencies per template
+    - Conditional logic (xsl:if / xsl:choose / xsl:when) per template
+    - Key XPath expressions (xsl:value-of, xsl:for-each) per template
+    - Entry-point templates (not called by any other template)
+    - Mode index (templates grouped by processing mode)
+    - All hardcoded literal values across the stylesheet
     """
+    import re as _re
+
     try:
         tree = etree.fromstring(raw_text.encode('utf-8'))
-        
-        # XSL namespace
+
         xsl_ns = "http://www.w3.org/1999/XSL/Transform"
-        nsmap = {"xsl": xsl_ns}
-        
+        nsmap  = {"xsl": xsl_ns}
+
+        def _is_element(el):
+            """Return True only for real Element nodes (skip comments/PIs)."""
+            return isinstance(el.tag, str)
+
+        def _local(element):
+            if not _is_element(element):
+                return ""
+            return etree.QName(element).localname
+
+        def _xtext(el):
+            """Collect all text content of an element as a single string."""
+            return " ".join(
+                (el.text or "").split() +
+                [(t.tail or "").strip() for t in el.iter() if t is not el and _is_element(t) and t.tail]
+            )
+
+        # ── Top-level metadata ────────────────────────────────────────────
         result = {
-            "version": tree.get("version", "1.0"),
-            "templates": [],
-            "params": [],
-            "variables": [],
-            "outputs": {},
+            "version":          tree.get("version", "1.0"),
+            "outputs":          {},
             "imports_includes": [],
-            "raw_xml": raw_text
+            "global_params":    [],
+            "global_variables": [],
+            # enriched sections added below
+            "template_call_graph": [],
+            "mode_index":          {},
+            "entry_points":        [],
+            "hardcoded_values":    [],
+            "raw_xml":             raw_text,
         }
-        
-        # Extract templates
-        for template in tree.findall(".//xsl:template", namespaces=nsmap):
-            result["templates"].append({
-                "match": template.get("match"),
-                "name": template.get("name"),
-                "mode": template.get("mode")
-            })
-        
-        # Extract top-level params
-        for param in tree.findall("./xsl:param", namespaces=nsmap):
-            result["params"].append({
-                "name": param.get("name"),
-                "select": param.get("select")
-            })
-        
-        # Extract top-level variables
-        for var in tree.findall("./xsl:variable", namespaces=nsmap):
-            result["variables"].append({
-                "name": var.get("name"),
-                "select": var.get("select")
-            })
-        
-        # Extract output
-        output_elem = tree.find("./xsl:output", namespaces=nsmap)
-        if output_elem is not None:
-            result["outputs"] = dict(output_elem.attrib)
-        
-        # Extract imports and includes
+
+        # ── xsl:output ────────────────────────────────────────────────────
+        out = tree.find("./xsl:output", namespaces=nsmap)
+        if out is not None:
+            result["outputs"] = dict(out.attrib)
+
+        # ── imports / includes ────────────────────────────────────────────
         for imp in tree.findall("./xsl:import", namespaces=nsmap):
-            result["imports_includes"].append({
-                "type": "import",
-                "href": imp.get("href")
-            })
+            result["imports_includes"].append({"type": "import", "href": imp.get("href")})
         for inc in tree.findall("./xsl:include", namespaces=nsmap):
-            result["imports_includes"].append({
-                "type": "include",
-                "href": inc.get("href")
+            result["imports_includes"].append({"type": "include", "href": inc.get("href")})
+
+        # ── Global params ─────────────────────────────────────────────────
+        for p in tree.findall("./xsl:param", namespaces=nsmap):
+            result["global_params"].append({
+                "name":    p.get("name"),
+                "select":  p.get("select"),
+                "default": (_xtext(p) or None),
             })
-        
+
+        # ── Global variables ──────────────────────────────────────────────
+        for v in tree.findall("./xsl:variable", namespaces=nsmap):
+            result["global_variables"].append({
+                "name":   v.get("name"),
+                "select": v.get("select"),
+                "value":  (_xtext(v) or None),
+            })
+
+        # ── Hardcoded literal values ──────────────────────────────────────
+        # Collect string literals from select/match/test attributes and text nodes
+        literal_pattern = _re.compile(r"'([^']{2,})'|\"([^\"]{2,})\"")
+        seen_literals: set = set()
+        for el in tree.iter():
+            if not _is_element(el):
+                continue
+            for attr_val in el.attrib.values():
+                for m in literal_pattern.finditer(attr_val):
+                    lit = m.group(1) or m.group(2)
+                    if lit not in seen_literals and not lit.startswith("http"):
+                        seen_literals.add(lit)
+                        result["hardcoded_values"].append({
+                            "value":   lit,
+                            "context": f"{_local(el)} @{list(el.attrib.keys())[list(el.attrib.values()).index(attr_val)]}",
+                        })
+            if el.text and el.text.strip() and _local(el) == "text":
+                lit = el.text.strip()
+                if lit and lit not in seen_literals:
+                    seen_literals.add(lit)
+                    parent = el.getparent()
+                    result["hardcoded_values"].append({
+                        "value":   lit,
+                        "context": f"xsl:text in {_local(parent) if parent is not None and _is_element(parent) else 'root'}",
+                    })
+
+        # ── Per-template analysis (call graph) ────────────────────────────
+        all_template_elements = tree.findall(".//xsl:template", namespaces=nsmap)
+        all_named_templates   = {t.get("name") for t in all_template_elements if t.get("name")}
+        called_by_others: set = set()   # track which named templates are called
+
+        for tmpl in all_template_elements:
+            tmpl_match = tmpl.get("match")
+            tmpl_name  = tmpl.get("name")
+            tmpl_mode  = tmpl.get("mode") or "default"
+            tmpl_prio  = tmpl.get("priority")
+
+            entry: dict = {
+                "match":             tmpl_match,
+                "name":              tmpl_name,
+                "mode":              tmpl_mode,
+                "priority":          tmpl_prio,
+                "params_accepted":   [],
+                "local_variables":   [],
+                "calls":             [],        # xsl:call-template
+                "applies":           [],        # xsl:apply-templates
+                "conditionals":      [],        # xsl:if / xsl:choose conditions
+                "value_of":          [],        # xsl:value-of select expressions
+                "for_each":          [],        # xsl:for-each select expressions
+                "variables_used":    [],        # $varname references in XPath
+                "output_elements":   [],        # literal result elements produced
+            }
+
+            # params accepted by this template (direct xsl:param children)
+            for p in tmpl.findall("xsl:param", namespaces=nsmap):
+                entry["params_accepted"].append({
+                    "name":    p.get("name"),
+                    "select":  p.get("select"),
+                    "required": p.get("required", "no"),
+                })
+
+            # local variables declared inside this template
+            for v in tmpl.findall(".//xsl:variable", namespaces=nsmap):
+                entry["local_variables"].append({
+                    "name":   v.get("name"),
+                    "select": v.get("select"),
+                    "value":  (_xtext(v) or None),
+                })
+
+            # xsl:call-template — direct named template calls
+            for ct in tmpl.findall(".//xsl:call-template", namespaces=nsmap):
+                callee = ct.get("name")
+                if callee:
+                    called_by_others.add(callee)
+                wp_list = []
+                for wp in ct.findall("xsl:with-param", namespaces=nsmap):
+                    wp_list.append({
+                        "name":   wp.get("name"),
+                        "select": wp.get("select"),
+                        "value":  (_xtext(wp) or None),
+                    })
+                entry["calls"].append({"callee": callee, "with_params": wp_list})
+
+            # xsl:apply-templates — pattern-based dispatching
+            for at in tmpl.findall(".//xsl:apply-templates", namespaces=nsmap):
+                at_entry = {
+                    "select": at.get("select", "(current node children)"),
+                    "mode":   at.get("mode", "default"),
+                    "sort_by": None,
+                }
+                sort_el = at.find("xsl:sort", namespaces=nsmap)
+                if sort_el is not None:
+                    at_entry["sort_by"] = sort_el.get("select")
+                entry["applies"].append(at_entry)
+
+            # xsl:if and xsl:choose conditions
+            for cond in tmpl.findall(".//xsl:if", namespaces=nsmap):
+                entry["conditionals"].append({
+                    "type": "if",
+                    "test": cond.get("test"),
+                })
+            for when in tmpl.findall(".//xsl:when", namespaces=nsmap):
+                entry["conditionals"].append({
+                    "type": "when",
+                    "test": when.get("test"),
+                })
+            for oth in tmpl.findall(".//xsl:otherwise", namespaces=nsmap):
+                entry["conditionals"].append({"type": "otherwise", "test": None})
+
+            # xsl:value-of — key field mappings / output expressions
+            seen_vo: set = set()
+            for vo in tmpl.findall(".//xsl:value-of", namespaces=nsmap):
+                sel = vo.get("select", "")
+                if sel and sel not in seen_vo:
+                    seen_vo.add(sel)
+                    entry["value_of"].append(sel)
+
+            # xsl:for-each — iteration / grouping patterns
+            seen_fe: set = set()
+            for fe in tmpl.findall(".//xsl:for-each", namespaces=nsmap):
+                sel = fe.get("select", "")
+                if sel and sel not in seen_fe:
+                    seen_fe.add(sel)
+                    entry["for_each"].append(sel)
+
+            # $variable references in all attribute values inside this template
+            tmpl_xml = etree.tostring(tmpl, encoding="unicode")
+            var_refs = sorted(set(_re.findall(r'\$([A-Za-z][A-Za-z0-9_\-\.]*)', tmpl_xml)))
+            entry["variables_used"] = var_refs
+
+            # literal result elements produced (non-XSL elements = output elements)
+            out_elems: list = []
+            seen_out: set = set()
+            for el in tmpl.iter():
+                if not _is_element(el):
+                    continue
+                local = _local(el)
+                ns    = etree.QName(el).namespace or ""
+                if xsl_ns not in ns and local not in seen_out:
+                    seen_out.add(local)
+                    out_elems.append(local)
+            entry["output_elements"] = out_elems[:30]  # cap for LLM token budget
+
+            result["template_call_graph"].append(entry)
+
+        # ── Mode index ────────────────────────────────────────────────────
+        for entry in result["template_call_graph"]:
+            mode = entry["mode"] or "default"
+            if mode not in result["mode_index"]:
+                result["mode_index"][mode] = []
+            label = entry.get("match") or entry.get("name") or "anonymous"
+            result["mode_index"][mode].append(label)
+
+        # ── Entry points (named templates not called by anything) ─────────
+        # Also include match="/" or match="*" templates as they are always roots
+        entry_points = []
+        for entry in result["template_call_graph"]:
+            name  = entry.get("name")
+            match = entry.get("match")
+            is_root_match = match in ("/", "*", ".", "node()")
+            is_uncalled   = name and name not in called_by_others
+            if is_root_match or is_uncalled or (not name and not match):
+                entry_points.append({
+                    "name":  name,
+                    "match": match,
+                    "mode":  entry.get("mode"),
+                    "reason": "root match" if is_root_match else (
+                              "not called by any other template" if is_uncalled else "anonymous"),
+                })
+        result["entry_points"] = entry_points
+
+        # Legacy flat list kept for backward compatibility
+        result["templates"] = [
+            {"match": e["match"], "name": e["name"], "mode": e["mode"]}
+            for e in result["template_call_graph"]
+        ]
+        # Same for params / variables (top-level aliases)
+        result["params"]    = result["global_params"]
+        result["variables"] = result["global_variables"]
+
         return result
-        
+
     except Exception as e:
         raise Exception(f"XSLT parsing error: {str(e)}")
 

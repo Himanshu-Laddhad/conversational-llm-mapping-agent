@@ -120,13 +120,62 @@ When first responding, explain this file clearly in plain English: what type it 
         if file_type == "XSLT":
             system_content += """
 
-Because this is an XSLT mapping stylesheet, structure your explanation to cover ALL of the following:
-1. TRANSFORMATION SUMMARY — one sentence describing what this stylesheet converts (input format → output format).
-2. INPUT SCHEMA — what XML structure the stylesheet expects (root element, key child elements, namespaces).
-3. OUTPUT SCHEMA — what XML/JSON structure is produced (root element, key output fields).
-4. FIELD MAPPING TABLE — a plain-text table of source XPath expressions mapped to their output field names.
-5. HARDCODED VALUES — list every literal constant embedded in the stylesheet (e.g. account numbers, currency codes, language IDs) and explain what each represents in the business context.
-6. CONDITIONAL / BUSINESS LOGIC — any if/choose/when rules, value translations (e.g. BEG02 codes → order type labels), or grouping logic."""
+Because this is an XSLT mapping stylesheet, structure your explanation to cover ALL of the following sections. Use template_call_graph, entry_points, mode_index, hardcoded_values, and global_variables from the parsed JSON to give specific, accurate answers for each section:
+
+1. TRANSFORMATION SUMMARY
+   - One sentence stating what this stylesheet converts (source format → target format).
+   - State the XSLT version, output method (XML/text/HTML), and any namespace declarations.
+   - List every imported or included stylesheet (imports_includes) and what role each plays.
+
+2. ENTRY POINTS AND EXECUTION FLOW
+   - Identify the entry-point templates from the entry_points list (match="/" or named templates not called by others).
+   - Walk through the execution flow step by step: which template fires first, what it produces or calls, and how control passes to child templates via xsl:call-template and xsl:apply-templates.
+   - Show the complete call chain as an indented tree. Example:
+       match="/" → calls: build_envelope
+         build_envelope → calls: build_isa, build_gs, build_st
+           build_isa → calls: format_date
+   - If multiple modes exist (from mode_index), explain what triggers each mode and which templates handle it.
+
+3. TEMPLATE RELATIONSHIP MAP
+   - For each template in template_call_graph, state:
+     a) Identity: match pattern OR template name
+     b) What it receives: params_accepted (name, default, required)
+     c) What it calls: calls list (callee names + with_params passed to each)
+     d) What it dispatches to: applies list (select path + mode)
+     e) What it produces: output_elements (literal XML/EDI elements it creates)
+   - Highlight any templates that are defined but never called — potential dead code or orphan templates.
+
+4. FIELD MAPPING TABLE
+   - For every xsl:value-of expression in each template (value_of list), create a mapping row:
+       Source XPath  |  Template  |  Output Field / EDI Segment+Element
+   - Group rows by output EDI segment where possible (e.g., all ISA fields together, all GS fields together).
+   - For xsl:for-each loops (for_each list), state what input node set is iterated and what repeating output structure it produces (e.g., one HL loop per line item).
+
+5. VARIABLE AND PARAMETER DEPENDENCY
+   - List all global_variables and global_params: name, select expression, and what business value they hold.
+   - For each template, note which variables it references (variables_used) and whether they are global or local (local_variables).
+   - Identify variables used across multiple templates — these are shared/key business values (e.g., sender ID, date format string).
+   - Flag any $variable reference that has no matching declared variable — these are potential bugs.
+
+6. CONDITIONAL AND BUSINESS LOGIC
+   - For each template's conditionals (if/when/otherwise), explain in plain English what business rule the test expression implements.
+   - Explain any value-translation logic (e.g., "if source type='PO' output qualifier 'NE', else 'RE'").
+   - Identify choose/when chains acting as lookup tables (e.g., mapping order type codes to EDI qualifier values).
+   - Flag any otherwise branches producing hardcoded default or fallback values.
+
+7. HARDCODED VALUES
+   - List every entry in hardcoded_values: the literal value, where it appears, and its business meaning.
+   - Group by category: EDI qualifiers, trading-partner/account IDs, currency codes, date formats, version strings, and other constants.
+   - Flag any hardcoded sender/receiver IDs or account numbers — these typically need to be parameterized for multi-partner deployments.
+
+8. SEGMENT-LEVEL TRANSFORMATION WALKTHROUGH
+   - Walk through each major EDI segment or output section this stylesheet produces.
+   - For each segment state: which template produces it, which source XPath fields feed each element, and any business rules applied.
+   - Use this format:
+       ISA segment → produced by: [template name]
+         ISA01 (auth qualifier) = hardcoded '00'
+         ISA06 (sender ID)      = $senderID (global param)
+         ISA09 (date)           = format-date(current-date(), '[Y0001][M01][D01]')"""
 
         if file_type == "D365_XML":
             system_content += """
