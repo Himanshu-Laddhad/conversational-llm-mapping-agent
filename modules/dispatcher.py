@@ -182,6 +182,7 @@ def dispatch(
     responses: Dict[str, str] = {}
     agent: Any = None
     audit_dict: Optional[Dict] = None
+    patched_xslt: Optional[str] = None
 
     # Re-use the existing FileAgent from session if explain was run before,
     # so the full conversation history inside the agent is preserved.
@@ -307,6 +308,7 @@ def dispatch(
         "agent":              agent,
         "ingested":           ingested,
         "audit_dict":         audit_dict,
+        "patched_xslt":       patched_xslt,
         "session":            session,
         "primary_file_name":  _primary_file_name,
     }
