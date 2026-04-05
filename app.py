@@ -90,6 +90,66 @@ def _init_state() -> None:
 
 _init_state()
 
+# ── Login Gate ────────────────────────────────────────────────────────────────
+
+DEMO_PASSWORD = "partnerlinq2026"
+
+PRESET_USERS = {
+    "sarah.chen@partnerlinq.com": {"name": "Sarah Chen",    "role": "EDI Analyst"},
+    "edi@nordstrom.com":          {"name": "Nordstrom EDI", "role": "Trading Partner · Nordstrom"},
+    "edi@adi.com":                {"name": "ADI Partner",   "role": "Trading Partner · ADI"},
+    "edi@pgatour.com":            {"name": "PGA Tour EDI",  "role": "Trading Partner · PGA Tour"},
+    "dev@partnerlinq.com":        {"name": "Dev User",      "role": "Developer"},
+}
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+
+if not st.session_state.logged_in:
+    st.markdown("""
+    <style>
+      .block-container { max-width: 480px !important; padding-top: 4rem; }
+      section[data-testid="stSidebar"] { display: none; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("## 🔗 PartnerLinQ")
+    st.markdown("**Conversational Mapping Intelligence Agent**")
+    st.divider()
+
+    st.markdown("##### Quick sign in")
+    cols = st.columns(2)
+    presets = list(PRESET_USERS.items())
+    for i, (email, info) in enumerate(presets):
+        col = cols[i % 2]
+        if col.button(f"{info['name']} — {info['role']}", key=f"preset_{i}", use_container_width=True):
+            st.session_state.logged_in = True
+            st.session_state.current_user = {"email": email, **info}
+            st.rerun()
+
+    st.divider()
+    st.markdown("##### Or sign in manually")
+
+    with st.form("login_form"):
+        name      = st.text_input("Full name", placeholder="Your name")
+        email     = st.text_input("Email address", placeholder="you@example.com")
+        password  = st.text_input("Password", type="password", placeholder="••••••••")
+        submitted = st.form_submit_button("Sign in →", use_container_width=True, type="primary")
+
+        if submitted:
+            if password != DEMO_PASSWORD:
+                st.error("Incorrect password. Use: partnerlinq2026")
+            elif not name or not email:
+                st.error("Please enter your name and email.")
+            else:
+                role = PRESET_USERS.get(email, {}).get("role", "Guest User")
+                st.session_state.logged_in = True
+                st.session_state.current_user = {"name": name, "email": email, "role": role}
+                st.rerun()
+
+    st.stop()
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _save_upload(uploaded_file) -> str:
@@ -120,6 +180,17 @@ with st.sidebar:
     st.caption("Conversational Mapping Intelligence Agent")
     st.divider()
 
+# ── Logged in user ──
+    user = st.session_state.current_user
+    if user:
+        st.markdown(f"**{user['name']}**  \n*{user['role']}*")
+        if st.button("Sign out", use_container_width=True):
+            for key in ["logged_in", "current_user", "session", "messages",
+                        "active_files", "pending_paths", "audit_dict",
+                        "audit_ingested", "last_route"]:
+                st.session_state.pop(key, None)
+            st.rerun()
+    st.divider()
     # ── Multi-file uploader ────────────────────────────────────────────────────
     st.subheader("📂 Upload Mapping Files")
     uploaded_files = st.file_uploader(
