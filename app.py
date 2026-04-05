@@ -95,11 +95,10 @@ _init_state()
 DEMO_PASSWORD = "partnerlinq2026"
 
 PRESET_USERS = {
-    "sarah.chen@partnerlinq.com": {"name": "Sarah Chen",    "role": "EDI Analyst"},
-    "edi@nordstrom.com":          {"name": "Nordstrom EDI", "role": "Trading Partner · Nordstrom"},
-    "edi@adi.com":                {"name": "ADI Partner",   "role": "Trading Partner · ADI"},
-    "edi@pgatour.com":            {"name": "PGA Tour EDI",  "role": "Trading Partner · PGA Tour"},
-    "dev@partnerlinq.com":        {"name": "Dev User",      "role": "Developer"},
+    "burhan@partnerlinq.com":   {"name": "Burhan Rasool", "role": "EDI Analyst"},
+    "abdullah@partnerlinq.com": {"name": "Abdullah",      "role": "EDI Analyst"},
+    "farhan@partnerlinq.com":   {"name": "Farhan",        "role": "EDI Analyst"},
+    "tom@partnerlinq.com":      {"name": "Tom",           "role": "EDI Analyst"},
 }
 
 if "logged_in" not in st.session_state:
