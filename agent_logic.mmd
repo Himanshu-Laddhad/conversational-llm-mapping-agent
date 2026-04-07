@@ -1,0 +1,94 @@
+%%{init: {"theme": "default", "flowchart": {"curve": "basis"}}}%%
+flowchart TD
+
+    %% ── INPUT LAYER ───────────────────────────────────────────────────────
+    U([User / Streamlit UI]) -->|"Natural language message\n+ optional file upload(s)"| AUTH
+
+    AUTH{{"Login Gate\napp.py"}}
+    AUTH -->|Authenticated| SESSION
+
+    %% ── SESSION LAYER ─────────────────────────────────────────────────────
+    SESSION["Session Object\nsession.py\n─────────────\n• session_id  prefix\n• ingested_files list\n• chat_history list\n• get_primary_ingested(msg)"]
+
+    SESSION -->|"Ingested file(s)\n+ chat history"| DISPATCH
+
+    %% ── FILE INGESTION ────────────────────────────────────────────────────
+    U2([File Upload]) -->|"Binary file bytes"| INGEST
+    INGEST["file_ingestion.py\n─────────────\ndetect_file_type()\n  ├─ X12 EDI flat-file\n  ├─ EDIFACT\n  ├─ D365_XML\n  ├─ X12_XML  (MapForce)\n  ├─ XSLT / XSL\n  ├─ XSD\n  └─ Generic XML\n\nparse_*()\n→ structured dict"]
+    INGEST --> SESSION
+
+    %% ── RAG AUTO-CONTEXT ──────────────────────────────────────────────────
+    RAG_Q["rag_engine.py\n─────────────\nquery_folder(msg)\n→ top-k relevant\n  snippets from\n  data/ index\n  (ChromaDB +\n   sentence-transformers)"]
+    DISPATCH -->|"Always runs first\n(non-fatal if missing)"| RAG_Q
+    RAG_Q -->|ctx_prefix string| DISPATCH
+
+    %% ── DISPATCHER ────────────────────────────────────────────────────────
+    DISPATCH["dispatcher.py\n─────────────\ndispatch(user_message,\n         file_paths,\n         session,\n         api_key)"]
+
+    DISPATCH --> ROUTER
+
+    %% ── INTENT ROUTER ─────────────────────────────────────────────────────
+    ROUTER["intent_router.py\n─────────────\nGroq LLM zero-shot\nclassifier\n(llama-3.3-70b)"]
+
+    ROUTER -->|explain| ENG_EXP
+    ROUTER -->|simulate| ENG_SIM
+    ROUTER -->|modify| ENG_MOD
+    ROUTER -->|generate| ENG_GEN
+    ROUTER -->|audit| ENG_AUD
+
+    %% ── ENGINES ───────────────────────────────────────────────────────────
+    ENG_EXP["groq_agent.py\nExplain Engine\n─────────────\nMulti-turn FileAgent\nGroq chat with\nfile structure context\n→ prose explanation"]
+
+    ENG_SIM["simulation_engine.py\nSimulate Engine\n─────────────\nlxml XSLT 1.0 transform\n→ real XML output\n\nFallback: Groq LLM\n→ predicted output"]
+
+    ENG_MOD["modification_engine.py\nModify Engine\n─────────────\nGroq LLM proposes\ndiff / patch\n→ (response_str,\n   patched_xslt)"]
+
+    ENG_GEN["xslt_generator.py\nGenerate Engine\n─────────────\nGroq LLM builds\nXSLT 2.0 skeleton\nfrom NL spec\n→ (response_str,\n   generated_xslt)"]
+
+    ENG_AUD["audit_engine.py\nAudit Engine\n─────────────\nLayer 1: Hardcoded rules\n  (NULL_CHECK, IF_NO_ELSE,\n   HARDCODED_IDS, ...)\nLayer 2: Groq LLM\n  dynamic analysis\n→ (prose_report,\n   questions_json)"]
+
+    %% ── AUTO-AUDIT ────────────────────────────────────────────────────────
+    ENG_MOD -->|"patched_xslt"| AUTO_AUDIT
+    ENG_GEN -->|"generated_xslt"| AUTO_AUDIT
+    AUTO_AUDIT["Auto-Audit\nRuns audit() on\nnewly generated\nor modified XSLT"]
+    AUTO_AUDIT --> ENG_AUD
+
+    %% ── AUDIT FORM LOOP ───────────────────────────────────────────────────
+    ENG_AUD -->|questions_json| FORM
+    FORM["Streamlit Form\napp.py\n─────────────\nRender question\nchecklist from JSON\nUser fills answers"]
+    FORM -->|"answers dict"| FOLLOWUP
+    FOLLOWUP["audit_followup()\n─────────────\nSecond-pass Groq\nverification with\nuser answers\n→ final verdict"]
+
+    %% ── RESPONSE ASSEMBLY ─────────────────────────────────────────────────
+    ENG_EXP --> RESULT
+    ENG_SIM --> RESULT
+    ENG_MOD --> RESULT
+    ENG_GEN --> RESULT
+    ENG_AUD --> RESULT
+    FOLLOWUP --> RESULT
+
+    RESULT["dispatch() return dict\n─────────────\nprimary_response  string\nintent            string\npatched_xslt      string|None\naudit_report      string|None\naudit_questions   list|None\nrag_context_used  bool"]
+
+    RESULT --> UI_RENDER
+
+    %% ── UI RENDERING ──────────────────────────────────────────────────────
+    UI_RENDER["app.py — Chat Bubble\n─────────────\n• Intent badge  (colour coded)\n• Assistant response text\n• Audit form  (if questions)\n• Download button  (if patched XSLT)\n• RAG sources badge"]
+
+    UI_RENDER --> U
+
+    %% ── RAG INDEX BUILD (offline) ─────────────────────────────────────────
+    IDX["scripts/index_data.py\nOffline indexer\n─────────────\nWalk data/**\nChunk text\nEmbed (sentence-transformers)\nUpsert ChromaDB\n→ .rag_index/"]
+    IDX -.->|"Populates index\n(run once)"| RAG_Q
+
+    %% ── STYLES ────────────────────────────────────────────────────────────
+    classDef engine  fill:#dbeafe,stroke:#2563eb,color:#1e3a5f
+    classDef store   fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef io      fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ui      fill:#f3e8ff,stroke:#7c3aed,color:#3b0764
+    classDef router  fill:#ffe4e6,stroke:#e11d48,color:#881337
+
+    class ENG_EXP,ENG_SIM,ENG_MOD,ENG_GEN,ENG_AUD,FOLLOWUP,AUTO_AUDIT engine
+    class IDX,RAG_Q store
+    class INGEST,SESSION io
+    class AUTH,UI_RENDER,FORM,U,U2 ui
+    class DISPATCH,ROUTER router
