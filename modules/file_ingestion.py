@@ -28,7 +28,10 @@ def detect_file_type(filename: str, raw_text: str) -> Tuple[str, str]:
     content_start = raw_text.strip()[:200].upper() if raw_text else ""
     
     # X12 EDI detection
-    if content_start.startswith("ISA") or ext in [".x12", ".edi", ".txt"]:
+    # Exclude .txt files whose content starts with '<' — those are XML variants
+    # (D365 XML, X12 XML, etc.) detected below, not flat-file EDI.
+    _txt_is_xml = ext == ".txt" and raw_text.lstrip()[:1] == "<"
+    if (content_start.startswith("ISA") or ext in [".x12", ".edi", ".txt"]) and not _txt_is_xml:
         if raw_text and "ISA" in raw_text[:500]:
             try:
                 # ISA segment is 106 characters fixed width
@@ -209,6 +212,52 @@ def detect_file_type(filename: str, raw_text: str) -> Tuple[str, str]:
             pass
         return ("XSD", "unknown")
     
+    # D365 XML detection (Microsoft Dynamics 365 ERP output)
+    # D365 files are often distributed as .txt; check content, not extension.
+    # Must run BEFORE generic XML so the specific type is assigned.
+    if ("<saleCustInvoice>" in raw_text[:1000]
+            or "<custInvoiceTrans" in raw_text[:1000]
+            or "<SalesTable>" in raw_text[:1000]):
+        try:
+            tree = etree.fromstring(raw_text.encode('utf-8'))
+            version_parts = ["D365:AX"]
+            invoice_id = ""
+            sales_id = ""
+            for elem in tree.iter():
+                local = etree.QName(elem).localname
+                if local == "InvoiceId" and elem.text and elem.text.strip():
+                    invoice_id = elem.text.strip()
+                elif local == "SalesId" and elem.text and elem.text.strip():
+                    sales_id = elem.text.strip()
+                if invoice_id and sales_id:
+                    break
+            if invoice_id:
+                version_parts.append(f"Inv:{invoice_id}")
+            if sales_id:
+                version_parts.append(f"SO:{sales_id}")
+            return ("D365_XML", " | ".join(version_parts))
+        except Exception:
+            pass
+        return ("D365_XML", "D365:AX | unknown")
+
+    # X12 XML detection (MapForce-generated XML representation of X12 EDI)
+    # Root element follows pattern X12_XXXXX_NNN (e.g., X12_00401_856).
+    # Must run BEFORE generic XML so the specific type is assigned.
+    if "<X12_" in raw_text[:500]:
+        try:
+            tree = etree.fromstring(raw_text.encode('utf-8'))
+            root_tag = etree.QName(tree).localname  # e.g., X12_00401_856
+            if root_tag.startswith("X12_"):
+                parts = root_tag.split("_")
+                if len(parts) >= 3:
+                    isa_ver = parts[1]  # e.g., "00401"
+                    ts_type = parts[2]  # e.g., "856"
+                    return ("X12_XML", f"ISA:{isa_ver} | TS:{ts_type} | Root:{root_tag}")
+                return ("X12_XML", f"Root:{root_tag}")
+        except Exception:
+            pass
+        return ("X12_XML", "unknown")
+
     # XML detection
     if ext == ".xml" or content_start.startswith("<?XML"):
         try:
@@ -258,6 +307,12 @@ def detect_file_type(filename: str, raw_text: str) -> Tuple[str, str]:
         tree = etree.fromstring(raw_text.encode('utf-8'))
         version = tree.getroottree().docinfo.xml_version or "1.0"
         root_tag = etree.QName(tree).localname
+        # Catch any X12 XML or D365 XML that slipped through to the fallback
+        if root_tag.startswith("X12_"):
+            parts = root_tag.split("_")
+            if len(parts) >= 3:
+                return ("X12_XML", f"ISA:{parts[1]} | TS:{parts[2]} | Root:{root_tag}")
+            return ("X12_XML", f"Root:{root_tag}")
         return ("XML", f"XML:{version} | Root:{root_tag}")
     except Exception:
         raise UnsupportedFileTypeError(
@@ -484,67 +539,265 @@ def parse_xml(raw_text: str) -> dict:
 def parse_xslt(raw_text: str) -> dict:
     """
     Parse XSLT file using lxml.
-    
-    Returns structured information about the XSLT stylesheet.
+
+    Returns rich structured information about the stylesheet including:
+    - Template call graph (xsl:call-template chains)
+    - Apply-templates flows (xsl:apply-templates with select/mode)
+    - Variable and parameter dependencies per template
+    - Conditional logic (xsl:if / xsl:choose / xsl:when) per template
+    - Key XPath expressions (xsl:value-of, xsl:for-each) per template
+    - Entry-point templates (not called by any other template)
+    - Mode index (templates grouped by processing mode)
+    - All hardcoded literal values across the stylesheet
     """
+    import re as _re
+
     try:
         tree = etree.fromstring(raw_text.encode('utf-8'))
-        
-        # XSL namespace
+
         xsl_ns = "http://www.w3.org/1999/XSL/Transform"
-        nsmap = {"xsl": xsl_ns}
-        
+        nsmap  = {"xsl": xsl_ns}
+
+        def _is_element(el):
+            """Return True only for real Element nodes (skip comments/PIs)."""
+            return isinstance(el.tag, str)
+
+        def _local(element):
+            if not _is_element(element):
+                return ""
+            return etree.QName(element).localname
+
+        def _xtext(el):
+            """Collect all text content of an element as a single string."""
+            return " ".join(
+                (el.text or "").split() +
+                [(t.tail or "").strip() for t in el.iter() if t is not el and _is_element(t) and t.tail]
+            )
+
+        # ── Top-level metadata ────────────────────────────────────────────
         result = {
-            "version": tree.get("version", "1.0"),
-            "templates": [],
-            "params": [],
-            "variables": [],
-            "outputs": {},
+            "version":          tree.get("version", "1.0"),
+            "outputs":          {},
             "imports_includes": [],
-            "raw_xml": raw_text
+            "global_params":    [],
+            "global_variables": [],
+            # enriched sections added below
+            "template_call_graph": [],
+            "mode_index":          {},
+            "entry_points":        [],
+            "hardcoded_values":    [],
+            "raw_xml":             raw_text,
         }
-        
-        # Extract templates
-        for template in tree.findall(".//xsl:template", namespaces=nsmap):
-            result["templates"].append({
-                "match": template.get("match"),
-                "name": template.get("name"),
-                "mode": template.get("mode")
-            })
-        
-        # Extract top-level params
-        for param in tree.findall("./xsl:param", namespaces=nsmap):
-            result["params"].append({
-                "name": param.get("name"),
-                "select": param.get("select")
-            })
-        
-        # Extract top-level variables
-        for var in tree.findall("./xsl:variable", namespaces=nsmap):
-            result["variables"].append({
-                "name": var.get("name"),
-                "select": var.get("select")
-            })
-        
-        # Extract output
-        output_elem = tree.find("./xsl:output", namespaces=nsmap)
-        if output_elem is not None:
-            result["outputs"] = dict(output_elem.attrib)
-        
-        # Extract imports and includes
+
+        # ── xsl:output ────────────────────────────────────────────────────
+        out = tree.find("./xsl:output", namespaces=nsmap)
+        if out is not None:
+            result["outputs"] = dict(out.attrib)
+
+        # ── imports / includes ────────────────────────────────────────────
         for imp in tree.findall("./xsl:import", namespaces=nsmap):
-            result["imports_includes"].append({
-                "type": "import",
-                "href": imp.get("href")
-            })
+            result["imports_includes"].append({"type": "import", "href": imp.get("href")})
         for inc in tree.findall("./xsl:include", namespaces=nsmap):
-            result["imports_includes"].append({
-                "type": "include",
-                "href": inc.get("href")
+            result["imports_includes"].append({"type": "include", "href": inc.get("href")})
+
+        # ── Global params ─────────────────────────────────────────────────
+        for p in tree.findall("./xsl:param", namespaces=nsmap):
+            result["global_params"].append({
+                "name":    p.get("name"),
+                "select":  p.get("select"),
+                "default": (_xtext(p) or None),
             })
-        
+
+        # ── Global variables ──────────────────────────────────────────────
+        for v in tree.findall("./xsl:variable", namespaces=nsmap):
+            result["global_variables"].append({
+                "name":   v.get("name"),
+                "select": v.get("select"),
+                "value":  (_xtext(v) or None),
+            })
+
+        # ── Hardcoded literal values ──────────────────────────────────────
+        # Collect string literals from select/match/test attributes and text nodes
+        literal_pattern = _re.compile(r"'([^']{2,})'|\"([^\"]{2,})\"")
+        seen_literals: set = set()
+        for el in tree.iter():
+            if not _is_element(el):
+                continue
+            for attr_val in el.attrib.values():
+                for m in literal_pattern.finditer(attr_val):
+                    lit = m.group(1) or m.group(2)
+                    if lit not in seen_literals and not lit.startswith("http"):
+                        seen_literals.add(lit)
+                        result["hardcoded_values"].append({
+                            "value":   lit,
+                            "context": f"{_local(el)} @{list(el.attrib.keys())[list(el.attrib.values()).index(attr_val)]}",
+                        })
+            if el.text and el.text.strip() and _local(el) == "text":
+                lit = el.text.strip()
+                if lit and lit not in seen_literals:
+                    seen_literals.add(lit)
+                    parent = el.getparent()
+                    result["hardcoded_values"].append({
+                        "value":   lit,
+                        "context": f"xsl:text in {_local(parent) if parent is not None and _is_element(parent) else 'root'}",
+                    })
+
+        # ── Per-template analysis (call graph) ────────────────────────────
+        all_template_elements = tree.findall(".//xsl:template", namespaces=nsmap)
+        all_named_templates   = {t.get("name") for t in all_template_elements if t.get("name")}
+        called_by_others: set = set()   # track which named templates are called
+
+        for tmpl in all_template_elements:
+            tmpl_match = tmpl.get("match")
+            tmpl_name  = tmpl.get("name")
+            tmpl_mode  = tmpl.get("mode") or "default"
+            tmpl_prio  = tmpl.get("priority")
+
+            entry: dict = {
+                "match":             tmpl_match,
+                "name":              tmpl_name,
+                "mode":              tmpl_mode,
+                "priority":          tmpl_prio,
+                "params_accepted":   [],
+                "local_variables":   [],
+                "calls":             [],        # xsl:call-template
+                "applies":           [],        # xsl:apply-templates
+                "conditionals":      [],        # xsl:if / xsl:choose conditions
+                "value_of":          [],        # xsl:value-of select expressions
+                "for_each":          [],        # xsl:for-each select expressions
+                "variables_used":    [],        # $varname references in XPath
+                "output_elements":   [],        # literal result elements produced
+            }
+
+            # params accepted by this template (direct xsl:param children)
+            for p in tmpl.findall("xsl:param", namespaces=nsmap):
+                entry["params_accepted"].append({
+                    "name":    p.get("name"),
+                    "select":  p.get("select"),
+                    "required": p.get("required", "no"),
+                })
+
+            # local variables declared inside this template
+            for v in tmpl.findall(".//xsl:variable", namespaces=nsmap):
+                entry["local_variables"].append({
+                    "name":   v.get("name"),
+                    "select": v.get("select"),
+                    "value":  (_xtext(v) or None),
+                })
+
+            # xsl:call-template — direct named template calls
+            for ct in tmpl.findall(".//xsl:call-template", namespaces=nsmap):
+                callee = ct.get("name")
+                if callee:
+                    called_by_others.add(callee)
+                wp_list = []
+                for wp in ct.findall("xsl:with-param", namespaces=nsmap):
+                    wp_list.append({
+                        "name":   wp.get("name"),
+                        "select": wp.get("select"),
+                        "value":  (_xtext(wp) or None),
+                    })
+                entry["calls"].append({"callee": callee, "with_params": wp_list})
+
+            # xsl:apply-templates — pattern-based dispatching
+            for at in tmpl.findall(".//xsl:apply-templates", namespaces=nsmap):
+                at_entry = {
+                    "select": at.get("select", "(current node children)"),
+                    "mode":   at.get("mode", "default"),
+                    "sort_by": None,
+                }
+                sort_el = at.find("xsl:sort", namespaces=nsmap)
+                if sort_el is not None:
+                    at_entry["sort_by"] = sort_el.get("select")
+                entry["applies"].append(at_entry)
+
+            # xsl:if and xsl:choose conditions
+            for cond in tmpl.findall(".//xsl:if", namespaces=nsmap):
+                entry["conditionals"].append({
+                    "type": "if",
+                    "test": cond.get("test"),
+                })
+            for when in tmpl.findall(".//xsl:when", namespaces=nsmap):
+                entry["conditionals"].append({
+                    "type": "when",
+                    "test": when.get("test"),
+                })
+            for oth in tmpl.findall(".//xsl:otherwise", namespaces=nsmap):
+                entry["conditionals"].append({"type": "otherwise", "test": None})
+
+            # xsl:value-of — key field mappings / output expressions
+            seen_vo: set = set()
+            for vo in tmpl.findall(".//xsl:value-of", namespaces=nsmap):
+                sel = vo.get("select", "")
+                if sel and sel not in seen_vo:
+                    seen_vo.add(sel)
+                    entry["value_of"].append(sel)
+
+            # xsl:for-each — iteration / grouping patterns
+            seen_fe: set = set()
+            for fe in tmpl.findall(".//xsl:for-each", namespaces=nsmap):
+                sel = fe.get("select", "")
+                if sel and sel not in seen_fe:
+                    seen_fe.add(sel)
+                    entry["for_each"].append(sel)
+
+            # $variable references in all attribute values inside this template
+            tmpl_xml = etree.tostring(tmpl, encoding="unicode")
+            var_refs = sorted(set(_re.findall(r'\$([A-Za-z][A-Za-z0-9_\-\.]*)', tmpl_xml)))
+            entry["variables_used"] = var_refs
+
+            # literal result elements produced (non-XSL elements = output elements)
+            out_elems: list = []
+            seen_out: set = set()
+            for el in tmpl.iter():
+                if not _is_element(el):
+                    continue
+                local = _local(el)
+                ns    = etree.QName(el).namespace or ""
+                if xsl_ns not in ns and local not in seen_out:
+                    seen_out.add(local)
+                    out_elems.append(local)
+            entry["output_elements"] = out_elems[:30]  # cap for LLM token budget
+
+            result["template_call_graph"].append(entry)
+
+        # ── Mode index ────────────────────────────────────────────────────
+        for entry in result["template_call_graph"]:
+            mode = entry["mode"] or "default"
+            if mode not in result["mode_index"]:
+                result["mode_index"][mode] = []
+            label = entry.get("match") or entry.get("name") or "anonymous"
+            result["mode_index"][mode].append(label)
+
+        # ── Entry points (named templates not called by anything) ─────────
+        # Also include match="/" or match="*" templates as they are always roots
+        entry_points = []
+        for entry in result["template_call_graph"]:
+            name  = entry.get("name")
+            match = entry.get("match")
+            is_root_match = match in ("/", "*", ".", "node()")
+            is_uncalled   = name and name not in called_by_others
+            if is_root_match or is_uncalled or (not name and not match):
+                entry_points.append({
+                    "name":  name,
+                    "match": match,
+                    "mode":  entry.get("mode"),
+                    "reason": "root match" if is_root_match else (
+                              "not called by any other template" if is_uncalled else "anonymous"),
+                })
+        result["entry_points"] = entry_points
+
+        # Legacy flat list kept for backward compatibility
+        result["templates"] = [
+            {"match": e["match"], "name": e["name"], "mode": e["mode"]}
+            for e in result["template_call_graph"]
+        ]
+        # Same for params / variables (top-level aliases)
+        result["params"]    = result["global_params"]
+        result["variables"] = result["global_variables"]
+
         return result
-        
+
     except Exception as e:
         raise Exception(f"XSLT parsing error: {str(e)}")
 
@@ -679,6 +932,392 @@ def parse_xsd(raw_text: str) -> dict:
         raise Exception(f"XSD parsing error: {str(e)}")
 
 
+def parse_d365_xml(raw_text: str) -> dict:
+    """
+    Parse Microsoft Dynamics 365 (D365/AX) ERP XML output.
+
+    Handles the saleCustInvoice / custInvoiceTrans structure generated by D365
+    and extracts key business fields (invoice header, line items, addresses,
+    shipment) into a flat, LLM-friendly dict.
+    """
+    try:
+        tree = etree.fromstring(raw_text.encode('utf-8'))
+
+        def _get(parent, tag):
+            """Return stripped text of the first matching element (namespace-agnostic)."""
+            for elem in parent.iter():
+                if etree.QName(elem).localname == tag:
+                    return elem.text.strip() if elem.text and elem.text.strip() else ""
+            return ""
+
+        def _get_all(parent, tag):
+            return [e for e in parent.iter() if etree.QName(e).localname == tag]
+
+        # ── Invoice Header ─────────────────────────────────────────────────────
+        header = {
+            "invoice_id":           _get(tree, "InvoiceId"),
+            "invoice_date":         _get(tree, "InvoiceDate"),
+            "sales_order_id":       _get(tree, "SalesId"),
+            "sales_order_date":     _get(tree, "SalesOrderDate"),
+            "customer_account":     _get(tree, "LocationId"),
+            "external_location_id": _get(tree, "ExternalLocationID"),
+            "invoice_amount":       _get(tree, "InvoiceAmount"),
+            "invoice_net_amount":   _get(tree, "InvoiceNetAmount"),
+            "currency":             _get(tree, "currencyCode"),
+            "payment_terms_days":   _get(tree, "PaymnetTermDays"),
+            "payment_terms_desc":   _get(tree, "PaymnetTermDescription"),
+            "payment_terms_code":   _get(tree, "PaymnetTermCode"),
+            "due_date":             _get(tree, "DueDate"),
+            "sales_origin":         _get(tree, "SalesOriginId"),
+            "delivery_name":        _get(tree, "DeliveryName"),
+            "delivery_mode":        _get(tree, "DlvMode"),
+            "delivery_terms":       _get(tree, "DlvTerm"),
+            "posting_profile":      _get(tree, "PostingProfile"),
+            "customer_ref":         _get(tree, "CustomerRef"),
+            "parm_id":              _get(tree, "ParmId"),
+            "ledger_voucher":       _get(tree, "LedgerVoucher"),
+        }
+
+        # ── Shipment / Carrier ─────────────────────────────────────────────────
+        shipment = {
+            "shipment_id":     _get(tree, "ShipmentID"),
+            "carrier_name":    _get(tree, "CarrierName"),
+            "tracking_number": _get(tree, "ShipCarrierTrackingNum"),
+            "delivery_mode":   _get(tree, "DlvMode"),
+            "total_cartons":   _get(tree, "TotalNoOfCartons"),
+            "total_weight":    _get(tree, "TotalShipmentofOrders"),
+            "arrival_utc":     _get(tree, "ShipmentArrivalUTCDateTime"),
+        }
+
+        # ── Line Items ─────────────────────────────────────────────────────────
+        line_items = []
+        for trans in _get_all(tree, "custInvoiceTrans"):
+            line_items.append({
+                "line_num":       _get(trans, "LineNum"),
+                "item_id":        _get(trans, "ItemId"),
+                "external_item":  _get(trans, "ExternalItemId"),
+                "barcode":        _get(trans, "Barcode"),
+                "description":    _get(trans, "Name"),
+                "quantity":       _get(trans, "Qty"),
+                "unit":           _get(trans, "SalesUnit"),
+                "unit_price":     _get(trans, "SalesPrice"),
+                "line_amount":    _get(trans, "LineAmountMST"),
+                "discount_pct":   _get(trans, "DiscPercent"),
+                "country_origin": _get(trans, "OrigCountryRegionId"),
+                "delivery_date":  _get(trans, "DlvDate"),
+                "line_header":    _get(trans, "LineHeader"),
+            })
+
+        # ── Addresses ──────────────────────────────────────────────────────────
+        def _addr(tag):
+            nodes = _get_all(tree, tag)
+            if not nodes:
+                return {}
+            a = nodes[0]
+            return {
+                "description": _get(a, "Description"),
+                "street":      _get(a, "Street"),
+                "city":        _get(a, "City"),
+                "state":       _get(a, "State"),
+                "zip":         _get(a, "ZipCode"),
+                "country":     _get(a, "CountryRegionId"),
+                "phone":       _get(a, "Phone"),
+            }
+
+        addresses = {
+            "ship_to":   _addr("SalesOrderHeaderAddress"),
+            "ship_from": _addr("ShipFromAddress"),
+            "vendor":    _addr("VendorAddress"),
+            "bill_to":   _addr("BTAddress"),
+        }
+
+        # ── Business Summary ───────────────────────────────────────────────────
+        inv  = header["invoice_id"]  or "N/A"
+        so   = header["sales_order_id"] or "N/A"
+        amt  = header["invoice_amount"] or "0"
+        ccy  = header["currency"]    or "USD"
+        cust = header["delivery_name"] or header["external_location_id"] or "Unknown"
+        carrier  = shipment["carrier_name"]    or "Unknown Carrier"
+        tracking = shipment["tracking_number"] or "N/A"
+        sf_city  = addresses["ship_from"].get("city",  "")
+        sf_state = addresses["ship_from"].get("state", "")
+        st_city  = addresses["ship_to"].get("city",  "")
+        st_state = addresses["ship_to"].get("state", "")
+
+        business_summary = (
+            f"D365 Customer Invoice: {inv} | Sales Order: {so} | "
+            f"Amount: {amt} {ccy} | Customer: {cust} | "
+            f"Line Items: {len(line_items)} | Carrier: {carrier} | "
+            f"Tracking: {tracking} | "
+            f"Ship From: {sf_city}, {sf_state} | "
+            f"Ship To: {st_city}, {st_state}"
+        )
+
+        target_edi = "810 (Customer Invoice)"
+        if shipment["shipment_id"]:
+            target_edi = "810 (Customer Invoice) — may also feed 856 (Ship Notice/ASN)"
+
+        return {
+            "source_system":          "Microsoft Dynamics 365 (D365/AX)",
+            "target_edi_transaction": target_edi,
+            "business_summary":       business_summary,
+            "header":                 header,
+            "shipment":               shipment,
+            "line_items":             line_items,
+            "addresses":              addresses,
+            "raw_xml":                raw_text,
+        }
+
+    except Exception as e:
+        raise Exception(f"D365 XML parsing error: {str(e)}")
+
+
+def parse_x12_xml(raw_text: str) -> dict:
+    """
+    Parse Altova MapForce-generated X12 XML (root element: X12_XXXXX_NNN).
+
+    These files are XML representations of X12 EDI transactions. The root
+    element encodes both the ISA version and transaction set type, e.g.
+    <X12_00401_856> = X12 version 00401, Transaction Set 856 Ship Notice.
+
+    Extracts ISA/GS envelope, transaction-specific segments, HL loop
+    structure, and line-item detail for LLM consumption.
+    """
+    try:
+        tree = etree.fromstring(raw_text.encode('utf-8'))
+        root_tag = etree.QName(tree).localname   # e.g., X12_00401_856
+
+        def _get(parent, tag):
+            for elem in parent.iter():
+                if etree.QName(elem).localname == tag:
+                    return elem.text.strip() if elem.text and elem.text.strip() else ""
+            return ""
+
+        def _all(parent, tag):
+            return [e for e in parent.iter() if etree.QName(e).localname == tag]
+
+        # Determine transaction type from root element
+        ts_type    = "Unknown"
+        isa_version = "unknown"
+        parts = root_tag.split("_")
+        if len(parts) >= 3:
+            isa_version = parts[1]   # e.g., "00401"
+            ts_type     = parts[2]   # e.g., "856"
+
+        ts_names = {
+            "850": "Purchase Order",
+            "810": "Invoice",
+            "856": "Ship Notice / Advance Shipment Notice (ASN)",
+            "855": "Purchase Order Acknowledgment",
+            "820": "Payment Order / Remittance",
+            "997": "Functional Acknowledgment",
+            "204": "Motor Carrier Load Tender",
+            "214": "Transportation Carrier Shipment Status",
+        }
+        ts_name = ts_names.get(ts_type, f"Transaction Set {ts_type}")
+
+        # ── ISA Envelope ───────────────────────────────────────────────────────
+        isa = {}
+        isa_elems = _all(tree, "ISA")
+        if isa_elems:
+            ie = isa_elems[0]
+            isa = {
+                "sender_qualifier":   _get(ie, "ISA05"),
+                "sender_id":          _get(ie, "ISA06").strip(),
+                "receiver_qualifier": _get(ie, "ISA07"),
+                "receiver_id":        _get(ie, "ISA08").strip(),
+                "date":               _get(ie, "ISA09"),
+                "time":               _get(ie, "ISA10"),
+                "version":            _get(ie, "ISA12"),
+                "control_number":     _get(ie, "ISA13"),
+                "ack_requested":      _get(ie, "ISA14"),
+                "usage_indicator":    _get(ie, "ISA15"),  # P=Production, T=Test
+            }
+
+        # ── GS Functional Group ────────────────────────────────────────────────
+        gs = {}
+        gs_elems = _all(tree, "GS")
+        if gs_elems:
+            ge = gs_elems[0]
+            gs = {
+                "functional_id_code": _get(ge, "GS01"),
+                "sender_app_id":      _get(ge, "GS02"),
+                "receiver_app_id":    _get(ge, "GS03"),
+                "date":               _get(ge, "GS04"),
+                "time":               _get(ge, "GS05"),
+                "group_control_num":  _get(ge, "GS06"),
+                "version_release":    _get(ge, "GS08"),
+            }
+
+        # ── Transaction-specific Segments ──────────────────────────────────────
+        transaction_data = {}
+
+        if ts_type == "856":
+            bsn_list = _all(tree, "BSN")
+            if bsn_list:
+                b = bsn_list[0]
+                transaction_data["bsn"] = {
+                    "transaction_set_purpose": _get(b, "BSN01"),
+                    "shipment_id":             _get(b, "BSN02"),
+                    "date":                    _get(b, "BSN03"),
+                    "time":                    _get(b, "BSN04"),
+                    "hierarchical_structure":  _get(b, "BSN05"),
+                }
+        elif ts_type == "810":
+            big_list = _all(tree, "BIG")
+            if big_list:
+                b = big_list[0]
+                transaction_data["big"] = {
+                    "invoice_date":        _get(b, "BIG01"),
+                    "invoice_number":      _get(b, "BIG02"),
+                    "purchase_order_date": _get(b, "BIG03"),
+                    "purchase_order_num":  _get(b, "BIG04"),
+                }
+        elif ts_type == "850":
+            beg_list = _all(tree, "BEG")
+            if beg_list:
+                b = beg_list[0]
+                transaction_data["beg"] = {
+                    "transaction_set_purpose": _get(b, "BEG01"),
+                    "purchase_order_type":     _get(b, "BEG02"),
+                    "purchase_order_number":   _get(b, "BEG03"),
+                    "date":                    _get(b, "BEG05"),
+                }
+
+        # ── REF Segments ───────────────────────────────────────────────────────
+        ref_labels = {
+            "CN": "Carrier Pro Number / Tracking",
+            "IV": "Invoice Number",
+            "PO": "Purchase Order Number",
+            "BM": "Bill of Lading",
+            "VN": "Vendor Order Number",
+            "CO": "Customer Order Number",
+        }
+        refs = []
+        for r in _all(tree, "REF"):
+            q = _get(r, "REF01")
+            v = _get(r, "REF02")
+            if q or v:
+                refs.append({"qualifier": q, "label": ref_labels.get(q, q), "value": v})
+
+        # ── TD5 Carrier / Transportation ───────────────────────────────────────
+        carrier_info = {}
+        td5_list = _all(tree, "TD5")
+        if td5_list:
+            t = td5_list[0]
+            carrier_info = {
+                "routing_sequence": _get(t, "TD501"),
+                "carrier_name":     _get(t, "TD505"),
+            }
+
+        # ── PRF Purchase Order References ──────────────────────────────────────
+        po_refs = []
+        for p in _all(tree, "PRF"):
+            po_refs.append({
+                "purchase_order_number": _get(p, "PRF01"),
+                "release_number":        _get(p, "PRF02"),
+                "change_order_number":   _get(p, "PRF03"),
+                "po_date":               _get(p, "PRF04"),
+            })
+
+        # ── LIN Line Items ─────────────────────────────────────────────────────
+        line_items = []
+        for lin in _all(tree, "LIN"):
+            parent = lin.getparent()
+            item = {
+                "line_sequence":     _get(lin, "LIN01"),
+                "product_id_qual_1": _get(lin, "LIN02"),
+                "product_id_1":      _get(lin, "LIN03"),
+                "product_id_qual_2": _get(lin, "LIN04"),
+                "product_id_2":      _get(lin, "LIN05"),
+            }
+            if parent is not None:
+                sn1_list = _all(parent, "SN1")
+                if sn1_list:
+                    s = sn1_list[0]
+                    item["sn1"] = {
+                        "quantity_shipped":         _get(s, "SN102"),
+                        "unit_of_measure":          _get(s, "SN103"),
+                        "quantity_ordered":         _get(s, "SN104"),
+                        "quantity_left_to_receive": _get(s, "SN106"),
+                        "line_status":              _get(s, "SN108"),
+                    }
+            line_items.append(item)
+
+        # ── MAN Marks / SSCC Labels ────────────────────────────────────────────
+        man_entries = []
+        for m in _all(tree, "MAN"):
+            man_entries.append({"qualifier": _get(m, "MAN01"), "value": _get(m, "MAN02")})
+
+        # ── HL Loops ──────────────────────────────────────────────────────────
+        hl_codes = {"S": "Shipment", "O": "Order", "P": "Pack", "I": "Item", "T": "Tare"}
+        hl_loops = []
+        for h in _all(tree, "HL"):
+            lc = _get(h, "HL03")
+            hl_loops.append({
+                "hl_id":      _get(h, "HL01"),
+                "parent_id":  _get(h, "HL02"),
+                "level_code": lc,
+                "level_name": hl_codes.get(lc, lc),
+            })
+
+        # ── CTT Transaction Totals ─────────────────────────────────────────────
+        ctt = {}
+        ctt_list = _all(tree, "CTT")
+        if ctt_list:
+            ctt = {
+                "number_of_line_items": _get(ctt_list[0], "CTT01"),
+                "hash_total":           _get(ctt_list[0], "CTT02"),
+            }
+
+        # ── Business Summary ───────────────────────────────────────────────────
+        sender_id   = isa.get("sender_id",   "N/A").strip()
+        receiver_id = isa.get("receiver_id", "N/A").strip()
+        usage       = "Production" if isa.get("usage_indicator") == "P" else "Test"
+        ctrl_num    = isa.get("control_number", "N/A")
+        shipment_id = transaction_data.get("bsn", {}).get("shipment_id", "")
+        ship_date   = transaction_data.get("bsn", {}).get("date", "")
+        po_num      = po_refs[0].get("purchase_order_number", "") if po_refs else ""
+        tracking    = next((r["value"] for r in refs if r["qualifier"] == "CN"), "")
+        carrier_nm  = carrier_info.get("carrier_name", "")
+
+        business_summary = (
+            f"X12 {ts_type} — {ts_name} | ISA Control#: {ctrl_num} | "
+            f"Sender: {sender_id} | Receiver: {receiver_id} | {usage}"
+        )
+        if shipment_id:
+            business_summary += f" | Shipment: {shipment_id}"
+        if ship_date:
+            business_summary += f" | Ship Date: {ship_date}"
+        if po_num:
+            business_summary += f" | PO#: {po_num}"
+        if carrier_nm:
+            business_summary += f" | Carrier: {carrier_nm}"
+        if tracking:
+            business_summary += f" | Tracking: {tracking}"
+
+        return {
+            "transaction_type":     ts_type,
+            "transaction_name":     ts_name,
+            "format":               "X12 XML (MapForce/Altova output)",
+            "business_summary":     business_summary,
+            "isa_envelope":         isa,
+            "gs_functional_group":  gs,
+            "transaction_data":     transaction_data,
+            "hl_loops":             hl_loops,
+            "reference_numbers":    refs,
+            "carrier":              carrier_info,
+            "purchase_order_refs":  po_refs,
+            "line_items":           line_items,
+            "sscc_marks":           man_entries,
+            "transaction_totals":   ctt,
+            "raw_xml":              raw_text,
+        }
+
+    except Exception as e:
+        raise Exception(f"X12 XML parsing error: {str(e)}")
+
+
 def ingest_file(
     file_path: Optional[str] = None,
     raw_bytes: Optional[bytes] = None,
@@ -754,6 +1393,10 @@ def ingest_file(
             parsed_content = parse_x12_edi(raw_text)
         elif file_type == "EDIFACT":
             parsed_content = parse_edifact(raw_text)
+        elif file_type == "D365_XML":
+            parsed_content = parse_d365_xml(raw_text)
+        elif file_type == "X12_XML":
+            parsed_content = parse_x12_xml(raw_text)
         elif file_type == "XML":
             parsed_content = parse_xml(raw_text)
         elif file_type == "XSLT":

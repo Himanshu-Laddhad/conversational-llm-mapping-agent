@@ -86,6 +86,10 @@ def _init_state() -> None:
         st.session_state.audit_ingested = None
     if "last_route" not in st.session_state:
         st.session_state.last_route = None
+    if "patched_xslt" not in st.session_state:
+        st.session_state.patched_xslt = None
+    if "patched_xslt_filename" not in st.session_state:
+        st.session_state.patched_xslt_filename = "modified.xml"
 
 
 _init_state()
@@ -338,6 +342,29 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 
+# ── Download Modified XSLT button ─────────────────────────────────────────────
+# Shown after a successful modify patch so the user can grab the edited file.
+if st.session_state.get("patched_xslt"):
+    st.divider()
+    dl_col1, dl_col2 = st.columns([7, 3])
+    with dl_col1:
+        fname = st.session_state.get("patched_xslt_filename", "modified.xml")
+        st.markdown(
+            f"**Modified XSLT ready to download:** `{fname}`  \n"
+            "The patch was applied and validated successfully. "
+            "Download the file and drop it into MapForce or your XSLT processor."
+        )
+    with dl_col2:
+        st.download_button(
+            label="Download Modified XSLT",
+            data=st.session_state.patched_xslt.encode("utf-8"),
+            file_name=st.session_state.get("patched_xslt_filename", "modified.xml"),
+            mime="application/xml",
+            use_container_width=True,
+            type="primary",
+        )
+
+
 # ── Inline audit form ──────────────────────────────────────────────────────────
 if st.session_state.audit_dict is not None:
     audit_dict = st.session_state.audit_dict
@@ -462,6 +489,17 @@ if user_input:
         if result.get("audit_dict") is not None:
             st.session_state.audit_dict     = result["audit_dict"]
             st.session_state.audit_ingested = result.get("ingested")
+
+        # Store patched XSLT for download button (modify intent)
+        patched = result.get("patched_xslt")
+        if patched and intent == "modify":
+            st.session_state.patched_xslt = patched
+            # Build a filename: original name + _patched suffix
+            orig_name = result.get("primary_file_name", "mapping.xml")
+            stem = orig_name.rsplit(".", 1)[0] if "." in orig_name else orig_name
+            st.session_state.patched_xslt_filename = f"{stem}_patched.xml"
+        else:
+            st.session_state.patched_xslt = None
 
     st.session_state.messages.append({
         "role":      "assistant",
