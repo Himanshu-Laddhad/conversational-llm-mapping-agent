@@ -53,6 +53,7 @@ st.markdown("""
   .badge-generate   { background: #ede9fe; color: #5b21b6; }
   .badge-audit      { background: #fee2e2; color: #991b1b; }
   .badge-rag        { background: #e0f2fe; color: #0369a1; }
+  .badge-error      { background: #fef2f2; color: #dc2626; }
 
   .file-chip {
     display: inline-flex;
@@ -143,7 +144,7 @@ if not st.session_state.logged_in:
 
         if submitted:
             if password != DEMO_PASSWORD:
-                st.error("Incorrect password. Use: partnerlinq2026")
+                st.error("Incorrect password.")
             elif not name or not email:
                 st.error("Please enter your name and email.")
             else:
@@ -156,10 +157,15 @@ if not st.session_state.logged_in:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _save_upload(uploaded_file) -> str:
-    """Persist an UploadedFile to data/uploads/ and return its path."""
+    """Persist an UploadedFile to data/uploads/ and return its path.
+
+    A session-ID prefix is prepended so two users uploading files with the
+    same name do not overwrite each other on disk.
+    """
     uploads_dir = Path(__file__).resolve().parent / "data" / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
-    dest = uploads_dir / uploaded_file.name
+    session_id = st.session_state.session.session_id
+    dest = uploads_dir / f"{session_id}_{uploaded_file.name}"
     dest.write_bytes(uploaded_file.getbuffer())
     return str(dest)
 
@@ -190,7 +196,8 @@ with st.sidebar:
         if st.button("Sign out", use_container_width=True):
             for key in ["logged_in", "current_user", "session", "messages",
                         "active_files", "pending_paths", "audit_dict",
-                        "audit_ingested", "last_route"]:
+                        "audit_ingested", "last_route",
+                        "patched_xslt", "patched_xslt_filename"]:
                 st.session_state.pop(key, None)
             st.rerun()
     st.divider()
@@ -247,7 +254,11 @@ with st.sidebar:
 
     # ── RAG index widget ───────────────────────────────────────────────────────
     st.subheader("🗂 RAG Index")
-    _file_count = max(len(list(_data_dir.glob("*"))) - 1, 0)  # subtract .gitkeep
+    _RAG_EXTS   = {".xml", ".xsl", ".xslt", ".xsd", ".edi", ".txt"}
+    _file_count = sum(
+        1 for f in _data_dir.rglob("*")
+        if f.is_file() and f.suffix.lower() in _RAG_EXTS
+    )
     _indexed    = _index_dir.exists()
 
     rag_col1, rag_col2 = st.columns(2)
@@ -281,12 +292,14 @@ with st.sidebar:
     with s_col1:
         if st.button("🔄 New Session", use_container_width=True):
             st.session_state.session.reset()
-            st.session_state.messages       = []
-            st.session_state.active_files   = []
-            st.session_state.pending_paths  = []
-            st.session_state.audit_dict     = None
-            st.session_state.audit_ingested = None
-            st.session_state.last_route     = None
+            st.session_state.messages            = []
+            st.session_state.active_files        = []
+            st.session_state.pending_paths       = []
+            st.session_state.audit_dict          = None
+            st.session_state.audit_ingested      = None
+            st.session_state.last_route          = None
+            st.session_state.patched_xslt        = None
+            st.session_state.patched_xslt_filename = "modified.xml"
             st.rerun()
     with s_col2:
         st.metric("Turns", len(st.session_state.session.history))
@@ -397,7 +410,7 @@ if st.session_state.audit_dict is not None:
                 cv   = q.get("current_value")
                 icon = SEV_ICON.get(sev, "⚪")
                 lbl  = f"{icon} **[{sev}]** [{cat}] {q['question']}"
-                if cv:
+                if cv is not None:
                     lbl += f"  *(current value: `{cv}`)*"
                 st.markdown(lbl)
                 ans = st.text_input(

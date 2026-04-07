@@ -413,7 +413,7 @@ def modify(
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
 
-    llm_text = response.choices[0].message.content.strip()
+    llm_text = (response.choices[0].message.content or "").strip()
 
     # -- Parse the proposed patch ----------------------------------------------
     patch = _parse_patch(llm_text)

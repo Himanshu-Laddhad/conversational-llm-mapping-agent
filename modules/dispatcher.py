@@ -217,7 +217,6 @@ def dispatch(
                     "Pass file_path pointing to an XSLT/mapping file."
                 )
             else:
-                msg = _ctx_prefix + user_message
                 response, _sim_agent = simulate(
                     ingested,
                     source_file=source_file,
@@ -234,7 +233,7 @@ def dispatch(
                 )
             else:
                 msg = _ctx_prefix + user_message
-                response, _mod_agent = modify(
+                response, patched_xslt = modify(
                     ingested,
                     modification_request=msg,
                     api_key=api_key,

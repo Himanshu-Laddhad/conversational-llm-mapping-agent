@@ -424,16 +424,17 @@ def _run_rule_checks(ingested: dict) -> List[Finding]:
         otherwise_count = len(re.findall(r"<xsl:otherwise\b", raw_xml, re.IGNORECASE))
         choose_count    = len(re.findall(r"<xsl:choose\b", raw_xml, re.IGNORECASE))
 
-        # xsl:if without any xsl:otherwise at all (basic check)
-        if if_count > 0 and otherwise_count == 0:
+        # xsl:choose without xsl:otherwise fallback (the real best-practice concern;
+        # xsl:if intentionally has no else — that belongs to xsl:choose/xsl:when)
+        if choose_count > 0 and otherwise_count == 0:
             findings.append(Finding(
                 rule_id="IF_NO_ELSE",
                 severity="WARNING",
                 message=(
-                    f"Found {if_count} xsl:if block(s) but no xsl:otherwise "
-                    f"fallback anywhere in the stylesheet. If a condition is "
-                    f"false, the corresponding output segment will be silently "
-                    f"omitted — verify this is intentional for all cases."
+                    f"Found {choose_count} xsl:choose block(s) but no xsl:otherwise "
+                    f"fallback anywhere in the stylesheet. If none of the xsl:when "
+                    f"conditions match, the corresponding output segment will be "
+                    f"silently omitted — verify this is intentional for all cases."
                 ),
                 layer="rule",
             ))
@@ -693,7 +694,7 @@ def audit(
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
 
-    llm_full = response.choices[0].message.content.strip()
+    llm_full = (response.choices[0].message.content or "").strip()
 
     # Strip the QUESTIONS_JSON block from the displayed prose report
     questions_marker = "### QUESTIONS_JSON"
@@ -809,7 +810,7 @@ def audit_followup(
         max_tokens=_MAX_FOLLOWUP_TOKENS,
     )
 
-    return response.choices[0].message.content.strip(), None
+    return (response.choices[0].message.content or "").strip(), None
 
 
 # ── CLI harness ───────────────────────────────────────────────────────────────

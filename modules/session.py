@@ -132,7 +132,7 @@ class Session:
             # Split on common separators and score word matches
             tokens = [t for t in fname.lower().replace("-", "_").split("_") if len(t) > 2]
             score  = sum(1 for t in tokens if t in msg_lower)
-            if score > best_score:
+            if score >= best_score:
                 best, best_score = f, score
 
         return best

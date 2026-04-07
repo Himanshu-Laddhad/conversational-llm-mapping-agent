@@ -180,7 +180,7 @@ def simulate(
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
 
-    return response.choices[0].message.content.strip(), None
+    return (response.choices[0].message.content or "").strip(), None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -200,11 +200,13 @@ def _try_lxml_transform(raw_xslt: str, source_path: str) -> Tuple[Optional[str],
         transform   = etree.XSLT(xslt_tree)
         result      = transform(source_tree)
 
-        # Check for transformation errors logged by lxml
+        # Only discard the real output for fatal/error-level entries;
+        # warnings (e.g. unsupported extension hints) do not invalidate the result.
         errors = transform.error_log
-        if errors:
-            msgs = "; ".join(str(e) for e in errors)
-            return None, f"lxml XSLT transform warnings/errors: {msgs}"
+        fatal = [e for e in errors if e.level_name in ("FATAL_ERROR", "ERROR")]
+        if fatal:
+            msgs = "; ".join(str(e) for e in fatal)
+            return None, f"lxml XSLT transform errors: {msgs}"
 
         return str(result), None
 

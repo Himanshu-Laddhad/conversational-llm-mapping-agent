@@ -393,7 +393,7 @@ def query_folder(
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
 
-    return response.choices[0].message.content.strip(), None
+    return (response.choices[0].message.content or "").strip(), None
 
 
 # ── CLI harness ───────────────────────────────────────────────────────────────
