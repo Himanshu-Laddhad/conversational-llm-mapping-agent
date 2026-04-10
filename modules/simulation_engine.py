@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from dotenv import load_dotenv
-from groq import Groq
 
 # Load .env from module directory or one level up
 _here = Path(__file__).resolve().parent
@@ -98,7 +97,8 @@ def simulate(
     source_file: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-) -> Tuple[str, Any]:
+    provider: str = "groq",
+) -> Tuple[str, Optional[str]]:
     """
     Simulate / validate a mapping against source data.
 
@@ -126,13 +126,13 @@ def simulate(
     if "parsed_content" not in ingested:
         raise ValueError("ingested dict is missing 'parsed_content' key")
 
-    key = api_key or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
     if not key:
-        raise ValueError(
-            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
-        )
+        raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     # ── Step 1: Try actual XSLT execution (lxml — XSLT 1.0 only) ─────────────
     xslt_result_xml: Optional[str] = None
@@ -141,10 +141,25 @@ def simulate(
     raw_xslt = ingested.get("parsed_content", {}).get("raw_xml") or \
                ingested.get("parsed_content", {}).get("raw_text")
 
+    execution_engine = "llm_simulation"   # updated below if real execution works
+
     if raw_xslt and source_file and Path(source_file).exists():
-        xslt_result_xml, xslt_error = _try_lxml_transform(
-            raw_xslt, str(source_file)
-        )
+        # Try Saxon/C first — supports XSLT 2.0 and 3.0 (no JVM required)
+        xslt_result_xml, xslt_error = _try_saxonche_transform(raw_xslt, str(source_file))
+        if xslt_result_xml:
+            execution_engine = "Saxon (XSLT 2.0/3.0)"
+        else:
+            # Fall back to lxml — reliable for XSLT 1.0
+            lxml_result, lxml_error = _try_lxml_transform(raw_xslt, str(source_file))
+            if lxml_result:
+                xslt_result_xml = lxml_result
+                xslt_error      = None
+                execution_engine = "lxml (XSLT 1.0)"
+            else:
+                # Both real engines failed; surface the Saxon error (more informative)
+                xslt_error = (
+                    f"Saxon: {xslt_error or 'failed'}  |  lxml: {lxml_error or 'failed'}"
+                )
 
     # ── Step 2: Load source file content for LLM context ─────────────────────
     source_xml_text: Optional[str] = None
@@ -166,24 +181,92 @@ def simulate(
         xslt_result_xml=xslt_result_xml,
         xslt_error=xslt_error,
         source_file=source_file,
+        execution_engine=execution_engine,
     )
 
-    # ── Step 4: Call Groq ─────────────────────────────────────────────────────
-    client = Groq(api_key=key)
-    response = client.chat.completions.create(
-        model=resolved_model,
+    # ── Step 4: Call LLM (explain real output, or simulate if no output) ──────
+    llm_response = chat_complete(
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user",   "content": user_message},
         ],
+        api_key=key,
+        model=resolved_model,
+        provider=provider,
         temperature=0.2,
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
 
-    return (response.choices[0].message.content or "").strip(), None
+    # Prepend a clear execution status line so the user knows what actually ran
+    if xslt_result_xml:
+        status_line = f"**Executed with {execution_engine}** — actual output below.\n\n"
+    else:
+        status_line = f"**LLM simulation** (real execution unavailable: {xslt_error or 'no source file'}).\n\n"
+
+    return status_line + llm_response, xslt_result_xml
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _try_saxonche_transform(raw_xslt: str, source_path: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Attempt XSLT 2.0/3.0 transformation using Saxon/C via saxonche.
+
+    Saxon is the reference XSLT 2.0/3.0 processor. saxonche wraps Saxon/C
+    (the C port of the Java Saxon library) so no JVM is required.
+    Install with: pip install saxonche
+
+    Returns (output_xml_str, None)     on success.
+    Returns (None, error_message)      on failure or if saxonche is not installed.
+    """
+    import os
+    import tempfile
+
+    try:
+        from saxonche import PySaxonProcessor   # type: ignore
+    except ImportError:
+        return None, "saxonche not installed — run: pip install saxonche"
+
+    xslt_tmp = None
+    try:
+        # Write the XSLT string to a temp file so Saxon can resolve any
+        # relative xsl:import / xsl:include paths from the same directory.
+        with tempfile.NamedTemporaryFile(
+            suffix=".xsl", mode="w", encoding="utf-8", delete=False
+        ) as f:
+            f.write(raw_xslt)
+            xslt_tmp = f.name
+
+        with PySaxonProcessor(license=False) as proc:
+            xslt30 = proc.new_xslt30_processor()
+            executable = xslt30.compile_stylesheet(stylesheet_file=xslt_tmp)
+
+            if executable is None:
+                err = getattr(xslt30, "error_message", None) or "Unknown compilation error"
+                return None, f"Saxon compilation failed: {err}"
+
+            output = executable.transform_to_string(source_file=source_path)
+
+            if output is None:
+                err = (
+                    getattr(executable, "error_message", None)
+                    or getattr(xslt30, "error_message", None)
+                    or "Transformation returned no output"
+                )
+                return None, f"Saxon transform error: {err}"
+
+            return output.strip(), None
+
+    except Exception as exc:
+        return None, str(exc)
+
+    finally:
+        if xslt_tmp:
+            try:
+                os.unlink(xslt_tmp)
+            except OSError:
+                pass
+
 
 def _try_lxml_transform(raw_xslt: str, source_path: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -220,8 +303,9 @@ def _build_user_message(
     xslt_result_xml: Optional[str],
     xslt_error: Optional[str],
     source_file: Optional[str],
+    execution_engine: str = "llm_simulation",
 ) -> str:
-    """Compose the user-turn message for the LLM simulation prompt."""
+    """Compose the user-turn message for the LLM simulation/analysis prompt."""
 
     parts: list[str] = []
 
@@ -264,35 +348,35 @@ def _build_user_message(
             "the XSLT templates and hardcoded values above.\n"
         )
 
-    # ── Actual lxml transform result (if available) ───────────────────────────
+    # ── Real transform output (saxonche or lxml) or failure note ─────────────
     if xslt_result_xml:
-        preview = xslt_result_xml[:3000]
-        if len(xslt_result_xml) > 3000:
-            preview += "\n... [truncated — full output is longer] ..."
+        preview = xslt_result_xml[:3_000]
+        if len(xslt_result_xml) > 3_000:
+            preview += "\n... [output truncated for context — full XML available as download] ..."
         parts.append(
-            f"## Actual lxml Transform Output (XSLT 1.0)\n"
-            f"lxml successfully executed the stylesheet. Here is the actual output:\n"
+            f"## Actual Transform Output ({execution_engine})\n"
+            f"The stylesheet was executed successfully. "
+            f"Here is the real output — use this as ground truth:\n"
             f"```xml\n{preview}\n```\n"
-            f"Use this as ground truth for your analysis.\n"
         )
     elif xslt_error:
         parts.append(
-            f"## lxml Transform Attempt\n"
-            f"lxml could not execute this stylesheet (likely XSLT 2.0 features used by MapForce).\n"
-            f"Error: `{xslt_error}`\n"
+            f"## Transform Execution Failed\n"
+            f"Real execution was not possible. Error: `{xslt_error}`\n"
             f"Perform a **LLM-based simulation** instead.\n"
         )
 
     # ── Task instruction ──────────────────────────────────────────────────────
     if xslt_result_xml:
         task = (
-            "The actual transformation output is provided above. "
-            "Analyse it against the mapping rules and source data. "
-            "Explain what happened for each key segment, and note any "
-            "conditional logic that fired or was skipped."
+            "The ACTUAL transformation output is shown above. "
+            "Analyse it segment by segment against the mapping rules and source data. "
+            "Explain what each output field contains, which source fields it came from, "
+            "which conditional logic fired, and flag any potential issues."
         )
     else:
         task = (
+            "Real execution failed or no source file was provided. "
             "Simulate this transformation: walk through the XSLT templates, "
             "apply them to the source data above, and show what the output "
             "would look like field-by-field. Identify any data quality issues."

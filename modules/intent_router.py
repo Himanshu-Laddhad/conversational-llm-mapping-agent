@@ -27,7 +27,6 @@ Usage (standalone test):
 import os
 import json
 from pathlib import Path
-from groq import Groq
 from dotenv import load_dotenv
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
@@ -137,46 +136,55 @@ ALL_INTENTS = list(INTENT_META.keys())
 
 # ── Core function ─────────────────────────────────────────────────────────────
 
-def route(user_message: str, api_key: str = None, threshold: float = THRESHOLD) -> dict:
+def route(
+    user_message: str,
+    api_key: str = None,
+    provider: str = "groq",
+    model: str = None,
+    threshold: float = THRESHOLD,
+) -> dict:
     """
     Score all four intents independently for a user message.
 
     Args:
         user_message: Raw message from the user.
-        api_key:      Groq API key. Falls back to GROQ_API_KEY env var.
+        api_key:      API key for the selected provider.
+        provider:     LLM provider: "groq", "openai", "nvidia_nim", "anthropic".
+        model:        Model override. Falls back to DEFAULT_MODELS[provider].
         threshold:    Min score (0.0–1.0) for an intent to be considered active.
-                      Default: 0.45
 
     Returns:
         {
           "scores":         { "explain": 0.92, "generate": 0.05, "modify": 0.85, "simulate": 0.10 },
           "reasoning":      { "explain": "...", "generate": "...", ... },
-          "active_intents": ["explain", "modify"],   # scores >= threshold, sorted by score desc
-          "primary":        "explain",               # highest scoring intent
-          "is_multi":       True,                    # True if more than one active intent
+          "active_intents": ["explain", "modify"],
+          "primary":        "explain",
+          "is_multi":       True,
           "threshold_used": 0.45,
         }
 
     On failure returns safe fallback with explain active.
     """
-    key = api_key or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
     if not key:
-        raise ValueError("Groq API key required. Pass api_key= or set GROQ_API_KEY env var.")
+        raise ValueError(f"API key required for provider {provider!r}.")
 
-    client = Groq(api_key=key)
+    resolved_model = model or MODEL or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     try:
-        response = client.chat.completions.create(
-            model=MODEL,
+        raw = chat_complete(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user",   "content": user_message},
             ],
+            api_key=key,
+            model=resolved_model,
+            provider=provider,
             temperature=0.0,
             max_tokens=250,
         )
-
-        raw = response.choices[0].message.content.strip()
 
         # Strip markdown fences if present
         if raw.startswith("```"):

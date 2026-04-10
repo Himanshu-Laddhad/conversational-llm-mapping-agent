@@ -24,6 +24,7 @@ def explain(
     question: Optional[str] = None,
     api_key: Optional[str] = None,
     model: str = "llama-3.3-70b-versatile",
+    provider: str = "groq",
 ) -> Tuple[str, Any]:
     """
     Explain a parsed file, optionally answering a specific question.
@@ -64,16 +65,18 @@ def explain(
     """
     try:
         from .file_agent import FileAgent
+        from .llm_client import PROVIDERS, DEFAULT_MODELS
     except ImportError:
-        from file_agent import FileAgent  # fallback when run as standalone script
+        from file_agent import FileAgent  # type: ignore
+        from llm_client import PROVIDERS, DEFAULT_MODELS  # type: ignore
 
-    key = api_key or os.environ.get("GROQ_API_KEY")
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
     if not key:
-        raise ValueError(
-            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
-        )
+        raise ValueError(f"API key required for provider {provider!r}.")
 
-    agent = FileAgent(groq_api_key=key, model=model)
+    resolved_model = model if model != "llama-3.3-70b-versatile" else DEFAULT_MODELS.get(provider, model)
+    agent = FileAgent(api_key=key, model=resolved_model, provider=provider)
     response = agent.load_file(ingested)
 
     if question:

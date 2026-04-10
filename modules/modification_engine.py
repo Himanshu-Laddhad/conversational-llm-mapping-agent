@@ -65,7 +65,6 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from dotenv import load_dotenv
-from groq import Groq
 
 # Load .env from module directory or one level up
 _here = Path(__file__).resolve().parent
@@ -308,6 +307,7 @@ def modify(
     modification_request: str,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    provider: str = "groq",
 ) -> Tuple[str, Optional[str]]:
     """
     Propose and auto-apply a targeted edit to an XSLT mapping based on a
@@ -340,13 +340,13 @@ def modify(
     if not modification_request or not modification_request.strip():
         raise ValueError("modification_request must be a non-empty string")
 
-    key = api_key or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
     if not key:
-        raise ValueError(
-            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
-        )
+        raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     # -- Extract XSLT source ---------------------------------------------------
     parsed    = ingested.get("parsed_content", {})
@@ -401,19 +401,18 @@ def modify(
         f"Please propose the minimal change to fulfil this request."
     )
 
-    # -- Call Groq -------------------------------------------------------------
-    client = Groq(api_key=key)
-    response = client.chat.completions.create(
-        model=resolved_model,
+    # -- Call LLM --------------------------------------------------------------
+    llm_text = chat_complete(
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user",   "content": user_message},
         ],
+        api_key=key,
+        model=resolved_model,
+        provider=provider,
         temperature=0.1,
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
-
-    llm_text = (response.choices[0].message.content or "").strip()
 
     # -- Parse the proposed patch ----------------------------------------------
     patch = _parse_patch(llm_text)

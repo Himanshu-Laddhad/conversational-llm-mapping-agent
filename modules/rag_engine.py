@@ -53,7 +53,6 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from dotenv import load_dotenv
-from groq import Groq
 
 # Load .env from module directory or one level up
 _here = Path(__file__).resolve().parent
@@ -292,6 +291,7 @@ def query_folder(
     top_k: int = _DEFAULT_TOP_K,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    provider: str = "groq",
 ) -> Tuple[str, Any]:
     """
     Embed a question, retrieve the top-K most relevant mapping file chunks
@@ -315,13 +315,13 @@ def query_folder(
     if not question or not question.strip():
         raise ValueError("question must be a non-empty string")
 
-    key = api_key or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
     if not key:
-        raise ValueError(
-            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
-        )
+        raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     try:
         import chromadb
@@ -382,18 +382,17 @@ def query_folder(
         f"## Question\n{question.strip()}"
     )
 
-    groq_client = Groq(api_key=key)
-    response = groq_client.chat.completions.create(
-        model=resolved_model,
+    return chat_complete(
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user",   "content": user_message},
         ],
+        api_key=key,
+        model=resolved_model,
+        provider=provider,
         temperature=0.2,
         max_tokens=_MAX_OUTPUT_TOKENS,
-    )
-
-    return (response.choices[0].message.content or "").strip(), None
+    ), None
 
 
 # ── CLI harness ───────────────────────────────────────────────────────────────

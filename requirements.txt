@@ -7,8 +7,14 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Core AI & LLM ─────────────────────────────────────────────────────────────
-# Groq SDK for LLM inference (intent scoring and conversational AI) - Version 1.0.0
+# Groq SDK (still used as fallback for environments without the openai package)
 groq~=1.0.0
+
+# OpenAI SDK — also used for Groq (OpenAI-compatible) and NVIDIA NIM endpoints
+openai>=1.0.0
+
+# Anthropic SDK — required only when provider="anthropic"
+anthropic>=0.25.0
 
 # Environment variable management (loads .env file for API keys)
 python-dotenv~=1.2.0
@@ -19,6 +25,10 @@ pydifact~=0.1.8
 
 # XML/XSLT parsing and processing (lxml with XPath and XSLT support)
 lxml~=6.0.0
+
+# Saxon/C Python wrapper — XSLT 2.0 and 3.0 execution, no JVM required
+# Used as the primary XSLT engine in simulate; lxml is the 1.0 fallback
+saxonche>=12.0.0
 
 # ── RAG / Multi-File Engine ────────────────────────────────────────────────────
 # Local persistent vector store — no server required

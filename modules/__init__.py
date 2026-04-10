@@ -2,9 +2,11 @@
 File processing modules for EDI, XML, and XSLT parsing and analysis.
 Includes intent routing, all five single-file engines (explain, simulate,
 modify, generate, audit), the RAG multi-file engine (index_folder,
-query_folder), session memory (Session), and second-pass audit (audit_followup).
+query_folder), session memory (Session), second-pass audit (audit_followup),
+and the unified multi-provider LLM client (llm_client).
 """
 
+from .llm_client import chat_complete, PROVIDERS, DEFAULT_MODELS
 from .file_ingestion import ingest_file, UnsupportedFileTypeError
 from .file_agent import FileAgent
 from .intent_router import route, get_meta, INTENT_META, ALL_INTENTS
@@ -18,6 +20,9 @@ from .session import Session
 from .dispatcher import dispatch, dispatch_folder
 
 __all__ = [
+    "chat_complete",
+    "PROVIDERS",
+    "DEFAULT_MODELS",
     "ingest_file",
     "UnsupportedFileTypeError",
     "FileAgent",

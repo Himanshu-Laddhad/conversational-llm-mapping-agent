@@ -137,6 +137,25 @@ class Session:
 
         return best
 
+    def replace_file(self, old_filename: str, new_ingested: dict) -> None:
+        """
+        Replace an existing ingested file by filename with a new version.
+
+        Useful after modify/generate: the patched XSLT supersedes the original
+        so subsequent turns automatically use the updated content.
+
+        If old_filename is not found in the session, the new file is appended
+        as a brand-new entry (same behaviour as add_file).
+        """
+        for i, f in enumerate(self.ingested_files):
+            if f.get("metadata", {}).get("filename", "") == old_filename:
+                self.ingested_files[i] = new_ingested
+                self.ingested = new_ingested
+                self.agent = None   # explain agent is file-specific — reset it
+                return
+        # Not found — treat as a new file
+        self.add_file(new_ingested)
+
     def add_turn(self, intent: str, user_msg: str, response: str) -> None:
         """Record one completed dispatch turn in the history."""
         _MAX_STORED = 1_500

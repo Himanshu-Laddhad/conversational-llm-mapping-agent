@@ -100,7 +100,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
-from groq import Groq
 
 # Load .env from module directory or one level up
 _here = Path(__file__).resolve().parent
@@ -585,6 +584,7 @@ def audit(
     context: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    provider: str = "groq",
 ) -> Tuple[str, Dict]:
     """
     Audit an ingested mapping file for misconfigurations and risky patterns.
@@ -635,13 +635,13 @@ def audit(
     if "parsed_content" not in ingested:
         raise ValueError("ingested dict is missing 'parsed_content' key")
 
-    key = api_key or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
     if not key:
-        raise ValueError(
-            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
-        )
+        raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     meta      = ingested.get("metadata", {})
     parsed    = ingested.get("parsed_content", {})
@@ -683,18 +683,17 @@ def audit(
 
     user_message = "\n".join(user_parts)
 
-    client = Groq(api_key=key)
-    response = client.chat.completions.create(
-        model=resolved_model,
+    llm_full = chat_complete(
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user",   "content": user_message},
         ],
+        api_key=key,
+        model=resolved_model,
+        provider=provider,
         temperature=0.1,
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
-
-    llm_full = (response.choices[0].message.content or "").strip()
 
     # Strip the QUESTIONS_JSON block from the displayed prose report
     questions_marker = "### QUESTIONS_JSON"
@@ -724,6 +723,7 @@ def audit_followup(
     answers: List[Dict],
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    provider: str = "groq",
 ) -> Tuple[str, None]:
     """
     Second-pass audit: verify the user's answers to the structured questions
@@ -763,13 +763,13 @@ def audit_followup(
     if not isinstance(answers, list):
         raise TypeError(f"answers must be a list, got {type(answers).__name__}")
 
-    key = api_key or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
     if not key:
-        raise ValueError(
-            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
-        )
+        raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     meta      = ingested.get("metadata", {})
     parsed    = ingested.get("parsed_content", {})
@@ -799,18 +799,17 @@ def audit_followup(
         + "Please evaluate these answers and return the VERIFICATION RESULT as specified."
     )
 
-    client = Groq(api_key=key)
-    response = client.chat.completions.create(
-        model=resolved_model,
+    return chat_complete(
         messages=[
             {"role": "system", "content": _FOLLOWUP_SYSTEM_PROMPT},
             {"role": "user",   "content": user_message},
         ],
+        api_key=key,
+        model=resolved_model,
+        provider=provider,
         temperature=0.1,
         max_tokens=_MAX_FOLLOWUP_TOKENS,
-    )
-
-    return (response.choices[0].message.content or "").strip(), None
+    ), None
 
 
 # ── CLI harness ───────────────────────────────────────────────────────────────

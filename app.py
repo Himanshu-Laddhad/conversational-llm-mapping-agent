@@ -11,7 +11,9 @@ Run with:
     streamlit run app.py
 """
 
+import re as _re
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -22,6 +24,7 @@ if _env.exists():
     load_dotenv(_env)
 
 from modules.dispatcher import dispatch
+from modules.file_ingestion import ingest_file
 from modules.session import Session
 from modules.audit_engine import audit_followup
 
@@ -65,6 +68,7 @@ st.markdown("""
     padding: 3px 8px;
     font-size: 0.78rem;
     margin: 2px 0;
+    color: #1e293b;   /* explicit dark text — stays readable in Streamlit dark mode */
   }
 </style>
 """, unsafe_allow_html=True)
@@ -87,10 +91,11 @@ def _init_state() -> None:
         st.session_state.audit_ingested = None
     if "last_route" not in st.session_state:
         st.session_state.last_route = None
-    if "patched_xslt" not in st.session_state:
-        st.session_state.patched_xslt = None
-    if "patched_xslt_filename" not in st.session_state:
-        st.session_state.patched_xslt_filename = "modified.xml"
+    if "llm_provider" not in st.session_state:
+        st.session_state.llm_provider = "groq"
+    if "llm_api_key" not in st.session_state:
+        import os
+        st.session_state.llm_api_key = os.getenv("GROQ_API_KEY", "")
 
 
 _init_state()
@@ -179,96 +184,166 @@ def _active_file_names() -> set:
     return {f["name"] for f in st.session_state.active_files}
 
 
+def _ingest_and_update_session(
+    xslt_str: str,
+    filename: str,
+    original_name: Optional[str] = None,
+    chip_name: Optional[str] = None,
+) -> None:
+    """
+    Write xslt_str to data/uploads/, ingest it, then update the session and
+    the active_files chip list.
+
+    Args:
+        xslt_str:      Full XSLT content to save.
+        filename:      Disk filename (may include session-id prefix).
+        original_name: metadata["filename"] of the file being replaced
+                       (used by session.replace_file; disk name with prefix).
+        chip_name:     Display name shown in the sidebar chip (no prefix).
+                       Falls back to original_name if not provided.
+
+    - original_name set  → replace that file in session (modify flow).
+    - original_name None → add as a new file (generate flow).
+    """
+    uploads_dir = Path(__file__).resolve().parent / "data" / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    dest = uploads_dir / filename
+    dest.write_text(xslt_str, encoding="utf-8")
+
+    new_ing = ingest_file(file_path=str(dest))
+    session = st.session_state.session
+
+    # Derive the clean display name for the chip (strip session-id prefix if present)
+    _sid = session.session_id
+    _new_display = filename
+    if _new_display.startswith(_sid + "_"):
+        _new_display = _new_display[len(_sid) + 1:]
+
+    if original_name:
+        session.replace_file(original_name, new_ing)
+        # Find the chip using chip_name (display name) or fall back to original_name
+        _find = chip_name or original_name
+        for af in st.session_state.active_files:
+            if af["name"] == _find:
+                af["name"] = _new_display
+                af["path"] = str(dest)
+                break
+        else:
+            # Chip not found under expected name — append as new entry
+            st.session_state.active_files.append({"name": _new_display, "path": str(dest)})
+    else:
+        session.add_file(new_ing)
+        st.session_state.active_files.append({"name": _new_display, "path": str(dest)})
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 _data_dir  = Path(__file__).resolve().parent / "data"
 _index_dir = Path(__file__).resolve().parent / ".rag_index"
 
 with st.sidebar:
-    st.title("🔗 PartnerLinQ")
+    st.markdown("## PartnerLinQ")
     st.caption("Conversational Mapping Intelligence Agent")
     st.divider()
 
-# ── Logged in user ──
+    # ── Logged-in user ────────────────────────────────────────────────────────
     user = st.session_state.current_user
     if user:
         st.markdown(f"**{user['name']}**  \n*{user['role']}*")
         if st.button("Sign out", use_container_width=True):
             for key in ["logged_in", "current_user", "session", "messages",
                         "active_files", "pending_paths", "audit_dict",
-                        "audit_ingested", "last_route",
-                        "patched_xslt", "patched_xslt_filename"]:
+                        "audit_ingested", "last_route", "llm_provider", "llm_api_key"]:
                 st.session_state.pop(key, None)
             st.rerun()
     st.divider()
-    # ── Multi-file uploader ────────────────────────────────────────────────────
-    st.subheader("📂 Upload Mapping Files")
-    uploaded_files = st.file_uploader(
-        "Supported: .xml .xsl .xslt .xsd .edi .txt",
-        type=["xml", "xsl", "xslt", "xsd", "edi", "txt"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-        key="file_uploader_widget",
-    )
 
-    # Detect newly added files (not already in active_files)
-    known_names = _active_file_names()
-    new_uploads = [f for f in (uploaded_files or []) if f.name not in known_names]
-    if new_uploads:
-        for uf in new_uploads:
-            saved = _save_upload(uf)
-            st.session_state.active_files.append({"name": uf.name, "path": saved})
-            st.session_state.pending_paths.append(saved)
+    # ── LLM Provider ──────────────────────────────────────────────────────────
+    from modules.llm_client import PROVIDERS, DEFAULT_MODELS
+
+    st.markdown("**LLM Provider**")
+    _provider_options = list(PROVIDERS.keys())
+    _provider_labels  = [PROVIDERS[p]["label"] for p in _provider_options]
+    _current_idx = _provider_options.index(st.session_state.llm_provider) \
+                   if st.session_state.llm_provider in _provider_options else 0
+
+    _selected_label = st.selectbox(
+        "Provider",
+        options=_provider_labels,
+        index=_current_idx,
+        label_visibility="collapsed",
+        key="provider_selectbox",
+    )
+    _selected_provider = _provider_options[_provider_labels.index(_selected_label)]
+    if _selected_provider != st.session_state.llm_provider:
+        # Reset API key when switching providers so user enters the right key
+        import os as _os
+        st.session_state.llm_provider = _selected_provider
+        _env_key = PROVIDERS[_selected_provider].get("env_key", "GROQ_API_KEY")
+        st.session_state.llm_api_key  = _os.getenv(_env_key, "")
         st.rerun()
 
+    _env_key_name = PROVIDERS[_selected_provider].get("env_key", "GROQ_API_KEY")
+    _api_key_input = st.text_input(
+        "API Key",
+        value=st.session_state.llm_api_key,
+        type="password",
+        placeholder=f"Paste your {_selected_label} key…",
+        label_visibility="collapsed",
+        key="api_key_input",
+    )
+    if _api_key_input != st.session_state.llm_api_key:
+        st.session_state.llm_api_key = _api_key_input
+
+    _default_model = DEFAULT_MODELS.get(_selected_provider, "—")
+    st.caption(f"Model: `{_default_model}`")
+    st.divider()
+
     # ── Active file list ───────────────────────────────────────────────────────
+    st.markdown("**Files in session**")
     if st.session_state.active_files:
-        st.caption(f"**{len(st.session_state.active_files)} file(s) in session:**")
         to_remove = None
         for i, af in enumerate(st.session_state.active_files):
             col_name, col_btn = st.columns([5, 1])
             with col_name:
                 st.markdown(
-                    f'<div class="file-chip">📄 {af["name"]}</div>',
+                    f'<div class="file-chip">{af["name"]}</div>',
                     unsafe_allow_html=True,
                 )
             with col_btn:
-                if st.button("✕", key=f"rm_{i}", help=f"Remove {af['name']}"):
+                if st.button("x", key=f"rm_{i}", help=f"Remove {af['name']}"):
                     to_remove = i
         if to_remove is not None:
             removed = st.session_state.active_files.pop(to_remove)
-            # Also remove from session's ingested_files (match by filename)
             session = st.session_state.session
             session.ingested_files = [
                 f for f in session.ingested_files
                 if f.get("metadata", {}).get("filename", "") != removed["name"]
             ]
-            # Update primary alias
             session.ingested = session.ingested_files[-1] if session.ingested_files else None
-            session.agent    = None   # reset agent — primary file may have changed
+            session.agent    = None
             st.rerun()
     else:
-        st.caption("No files loaded — upload files or ask a general question.")
-
+        st.caption("No files — attach via the paperclip in chat.")
     st.divider()
 
-    # ── RAG index widget ───────────────────────────────────────────────────────
-    st.subheader("🗂 RAG Index")
+    # ── RAG index ─────────────────────────────────────────────────────────────
+    st.markdown("**RAG Index**")
     _RAG_EXTS   = {".xml", ".xsl", ".xslt", ".xsd", ".edi", ".txt"}
     _file_count = sum(
         1 for f in _data_dir.rglob("*")
         if f.is_file() and f.suffix.lower() in _RAG_EXTS
     )
-    _indexed    = _index_dir.exists()
+    _indexed = _index_dir.exists()
 
     rag_col1, rag_col2 = st.columns(2)
-    rag_col1.metric("Files in data/", _file_count)
-    rag_col2.metric("Index", "Built ✅" if _indexed else "None ❌")
+    rag_col1.metric("data/ files", _file_count)
+    rag_col2.metric("Status", "Ready" if _indexed else "None")
 
     if not _indexed:
-        st.caption("Add files to `data/` then run:\n`python scripts/index_data.py`")
+        st.caption("Run `python scripts/index_data.py` after adding files to `data/`.")
 
-    if st.button("🔄 Re-index data/", use_container_width=True, disabled=(_file_count == 0)):
+    if st.button("Re-index data/", use_container_width=True, disabled=(_file_count == 0)):
         with st.spinner("Indexing…"):
             try:
                 from modules.rag_engine import index_folder
@@ -278,36 +353,28 @@ with st.sidebar:
                     force_reindex=True,
                 )
                 st.success(
-                    f"Done — indexed {idx_result.get('indexed', 0)}, "
+                    f"Indexed {idx_result.get('indexed', 0)}, "
                     f"skipped {idx_result.get('skipped', 0)}"
                 )
             except Exception as ex:
                 st.error(f"Index failed: {ex}")
-
     st.divider()
 
     # ── Session controls ───────────────────────────────────────────────────────
-    st.subheader("⚙️ Session")
-    s_col1, s_col2 = st.columns(2)
-    with s_col1:
-        if st.button("🔄 New Session", use_container_width=True):
-            st.session_state.session.reset()
-            st.session_state.messages            = []
-            st.session_state.active_files        = []
-            st.session_state.pending_paths       = []
-            st.session_state.audit_dict          = None
-            st.session_state.audit_ingested      = None
-            st.session_state.last_route          = None
-            st.session_state.patched_xslt        = None
-            st.session_state.patched_xslt_filename = "modified.xml"
-            st.rerun()
-    with s_col2:
-        st.metric("Turns", len(st.session_state.session.history))
-
+    st.markdown("**Session**")
+    if st.button("New Session", use_container_width=True):
+        st.session_state.session.reset()
+        st.session_state.messages       = []
+        st.session_state.active_files   = []
+        st.session_state.pending_paths  = []
+        st.session_state.audit_dict     = None
+        st.session_state.audit_ingested = None
+        st.session_state.last_route     = None
+        st.rerun()
     st.divider()
 
     # ── Debug expander ─────────────────────────────────────────────────────────
-    with st.expander("🔬 Debug — last route", expanded=False):
+    with st.expander("Debug — last route", expanded=False):
         if st.session_state.last_route:
             r = st.session_state.last_route
             st.write(f"**Primary:** `{r.get('primary', '—')}`")
@@ -321,12 +388,12 @@ with st.sidebar:
             session_files = st.session_state.session.ingested_files
             st.write(f"**Session files ({len(session_files)}):**")
             for f in session_files:
-                st.caption(f"• {f.get('metadata', {}).get('filename', '?')}")
+                st.caption(f"- {f.get('metadata', {}).get('filename', '?')}")
         else:
             st.caption("No message sent yet.")
 
     st.divider()
-    st.caption("PartnerLinQ × Industry Practicum · 2026")
+    st.caption("PartnerLinQ · Industry Practicum · 2026")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -335,13 +402,13 @@ with st.sidebar:
 
 st.subheader("Mapping Intelligence Chat")
 st.caption(
-    "Upload one or more mapping files in the sidebar, then ask anything — "
+    "Attach mapping files using the paperclip button below, then ask anything — "
     "explain, modify, generate, simulate, or audit. "
     "The agent remembers the full conversation and all uploaded files."
 )
 
 # ── Render conversation history ────────────────────────────────────────────────
-for msg in st.session_state.messages:
+for _msg_idx, msg in enumerate(st.session_state.messages):
     role = msg["role"]
     with st.chat_message(role):
         if role == "assistant":
@@ -353,29 +420,23 @@ for msg in st.session_state.messages:
                     header += f'&nbsp;<span style="font-size:0.72rem;color:#64748b;">using <b>{file_used}</b></span>'
                 st.markdown(header, unsafe_allow_html=True)
         st.markdown(msg["content"])
+        # Inline download button — only on assistant messages that produced an XSLT
+        if msg.get("download_xslt"):
+            dl_fname = msg.get("download_filename", "output.xml")
+            # Use stored label; fall back to stripping the session-id prefix
+            _parts = dl_fname.split("_", 2)
+            _fallback_label = _parts[-1] if len(_parts) >= 3 else dl_fname
+            dl_label = msg.get("download_label") or f"Download {_fallback_label}"
+            st.download_button(
+                label=dl_label,
+                data=msg["download_xslt"].encode("utf-8"),
+                file_name=dl_fname,
+                mime="application/xml",
+                type="primary",
+                use_container_width=False,
+                key=f"dl_{_msg_idx}",
+            )
 
-
-# ── Download Modified XSLT button ─────────────────────────────────────────────
-# Shown after a successful modify patch so the user can grab the edited file.
-if st.session_state.get("patched_xslt"):
-    st.divider()
-    dl_col1, dl_col2 = st.columns([7, 3])
-    with dl_col1:
-        fname = st.session_state.get("patched_xslt_filename", "modified.xml")
-        st.markdown(
-            f"**Modified XSLT ready to download:** `{fname}`  \n"
-            "The patch was applied and validated successfully. "
-            "Download the file and drop it into MapForce or your XSLT processor."
-        )
-    with dl_col2:
-        st.download_button(
-            label="Download Modified XSLT",
-            data=st.session_state.patched_xslt.encode("utf-8"),
-            file_name=st.session_state.get("patched_xslt_filename", "modified.xml"),
-            mime="application/xml",
-            use_container_width=True,
-            type="primary",
-        )
 
 
 # ── Inline audit form ──────────────────────────────────────────────────────────
@@ -438,7 +499,12 @@ if st.session_state.audit_dict is not None:
             else:
                 with st.spinner("Running second-pass verification…"):
                     try:
-                        followup, _ = audit_followup(ingested_ref, answers)
+                        followup, _ = audit_followup(
+                            ingested_ref,
+                            answers,
+                            api_key=st.session_state.get("llm_api_key") or None,
+                            provider=st.session_state.get("llm_provider", "groq"),
+                        )
                     except Exception as ex:
                         followup = f"[ERROR] {ex}"
 
@@ -468,18 +534,59 @@ if st.session_state.audit_dict is not None:
             st.rerun()
 
 
+# ── Attachment popover (compact file upload near the chat input) ───────────────
+# Capture the uploader return value OUTSIDE the popover context so that
+# st.rerun() is never called from inside the popover block.  Calling rerun
+# from inside a with-st.popover() raises StopException before the context
+# manager exits cleanly, which silently discards any session_state changes
+# made inside the block.
+_inline_uploads = None
+with st.popover("📎 Attach files", use_container_width=False):
+    st.caption("Upload mapping files to use in the chat.")
+    _inline_uploads = st.file_uploader(
+        "Attach files",
+        type=["xml", "xsl", "xslt", "xsd", "edi", "txt"],
+        accept_multiple_files=True,
+        key="inline_uploader",
+        label_visibility="collapsed",
+    )
+
+# Process new inline uploads AFTER the popover context has closed.
+# We ingest immediately here so the file is available to the agent
+# even before the user sends their first message.  pending_paths is
+# used as a fallback only when ingest itself fails.
+if _inline_uploads:
+    _known = _active_file_names()
+    _new_inline = [f for f in _inline_uploads if f.name not in _known]
+    if _new_inline:
+        for _uf in _new_inline:
+            _saved = _save_upload(_uf)
+            st.session_state.active_files.append({"name": _uf.name, "path": _saved})
+            try:
+                _ing = ingest_file(file_path=_saved)
+                st.session_state.session.add_file(_ing)
+            except Exception:
+                # Ingest failed — queue for dispatch as a safe fallback
+                st.session_state.pending_paths.append(_saved)
+        st.rerun()
+
 # ── Chat input ─────────────────────────────────────────────────────────────────
 user_input = st.chat_input("Ask anything about your mapping files…")
 
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
 
+    _active_provider = st.session_state.get("llm_provider", "groq")
+    _active_api_key  = st.session_state.get("llm_api_key", "")
+
     with st.spinner("Thinking…"):
         try:
             result = dispatch(
                 user_message=user_input,
-                file_paths=st.session_state.pending_paths,   # new uploads this turn
+                file_paths=st.session_state.pending_paths,
                 session=st.session_state.session,
+                provider=_active_provider,
+                api_key=_active_api_key or None,
             )
             dispatch_error = None
         except Exception as ex:
@@ -488,6 +595,10 @@ if user_input:
 
     # Clear pending paths — session now owns the ingested dicts
     st.session_state.pending_paths = []
+
+    download_xslt     = None   # type: Optional[str]
+    download_filename = None   # type: Optional[str]
+    download_label    = None   # type: Optional[str]
 
     if result is None:
         response_text = f"⚠️ Error: {dispatch_error}"
@@ -503,21 +614,65 @@ if user_input:
             st.session_state.audit_dict     = result["audit_dict"]
             st.session_state.audit_ingested = result.get("ingested")
 
-        # Store patched XSLT for download button (modify intent)
-        patched = result.get("patched_xslt")
+        # ── Auto-ingest patched/generated XSLT back into session ─────────────
+
+        patched          = result.get("patched_xslt")
+        generated        = result.get("generated_xslt")
+        simulate_out     = result.get("simulate_output")
+        _sid             = st.session_state.session.session_id
+
         if patched and intent == "modify":
-            st.session_state.patched_xslt = patched
-            # Build a filename: original name + _patched suffix
-            orig_name = result.get("primary_file_name", "mapping.xml")
-            stem = orig_name.rsplit(".", 1)[0] if "." in orig_name else orig_name
-            st.session_state.patched_xslt_filename = f"{stem}_patched.xml"
-        else:
-            st.session_state.patched_xslt = None
+            # raw_orig is the metadata filename (includes session-id prefix)
+            _raw_orig = result.get("primary_file_name", "mapping.xml")
+            # Strip session-id prefix to get a clean display name
+            if _raw_orig.startswith(_sid + "_"):
+                _orig_display = _raw_orig[len(_sid) + 1:]
+            else:
+                _orig_display = _raw_orig
+            _stem             = _orig_display.rsplit(".", 1)[0] if "." in _orig_display else _orig_display
+            _new_display      = f"{_stem}_patched.xml"
+            download_filename = f"{_sid}_{_new_display}"
+            download_label    = f"Download {_new_display}"
+            download_xslt     = patched
+            try:
+                _ingest_and_update_session(
+                    patched,
+                    download_filename,
+                    original_name=_raw_orig,    # metadata filename for session lookup
+                    chip_name=_orig_display,    # display name for chip update
+                )
+            except Exception:
+                pass   # ingest failure is non-fatal; user can still download
+
+        elif simulate_out and intent == "simulate":
+            download_filename = f"{_sid}_transform_output.xml"
+            download_label    = "Download transform output (XML)"
+            download_xslt     = simulate_out
+
+        elif generated and intent == "generate":
+            download_filename = f"{_sid}_generated.xml"
+            download_label    = "Download generated XSLT"
+            download_xslt     = generated
+            # Strip the full ```xml ... ``` block from the chat message — it goes
+            # into the download, not the conversation.  Keep the prose description.
+            response_text = _re.sub(
+                r"```xml[\s\S]*?```",
+                "_Full XSLT is available via the download button below._",
+                response_text,
+                count=1,
+            )
+            try:
+                _ingest_and_update_session(generated, download_filename, original_name=None)
+            except Exception:
+                pass
 
     st.session_state.messages.append({
-        "role":      "assistant",
-        "content":   response_text,
-        "intent":    intent,
-        "file_used": file_used,
+        "role":              "assistant",
+        "content":           response_text,
+        "intent":            intent,
+        "file_used":         file_used,
+        "download_xslt":     download_xslt,
+        "download_filename": download_filename,
+        "download_label":    download_label,
     })
     st.rerun()

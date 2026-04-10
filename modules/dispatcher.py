@@ -67,6 +67,7 @@ def dispatch(
     ingested: Optional[dict] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    provider: str = "groq",
     session: Optional[Any] = None,
 ) -> dict:
     """
@@ -129,8 +130,9 @@ def dispatch(
         from audit_engine import audit           # type: ignore
         from rag_engine import query_folder      # type: ignore
 
-    # ── Resolve model (caller > env var > default) ────────────────────────────
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    # ── Resolve model (caller > env var > provider default) ──────────────────
+    from .llm_client import DEFAULT_MODELS
+    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     # ── 1. Ingest new files ───────────────────────────────────────────────────
     # Merge legacy file_path with new file_paths list, deduplicate
@@ -166,6 +168,7 @@ def dispatch(
                 top_k=3,
                 api_key=api_key,
                 model=resolved_model,
+                provider=provider,
             )
             if _rag_text and "[no results]" not in _rag_text.lower():
                 _ctx_prefix = (
@@ -176,13 +179,15 @@ def dispatch(
             pass   # RAG failure is non-fatal — continue without it
 
     # ── 4. Classify user intent ───────────────────────────────────────────────
-    route_result = route(user_message, api_key=api_key)
+    route_result = route(user_message, api_key=api_key, provider=provider, model=resolved_model)
 
     # ── 5. Dispatch to each active engine in priority order ───────────────────
     responses: Dict[str, str] = {}
     agent: Any = None
     audit_dict: Optional[Dict] = None
     patched_xslt: Optional[str] = None
+    generated_xslt: Optional[str] = None
+    simulate_output: Optional[str] = None   # actual XML output from Saxon/lxml if real execution succeeded
 
     # Re-use the existing FileAgent from session if explain was run before,
     # so the full conversation history inside the agent is preserved.
@@ -207,6 +212,7 @@ def dispatch(
                     question=user_message,
                     api_key=api_key,
                     model=resolved_model,
+                    provider=provider,
                 )
                 responses[intent] = response
 
@@ -217,11 +223,12 @@ def dispatch(
                     "Pass file_path pointing to an XSLT/mapping file."
                 )
             else:
-                response, _sim_agent = simulate(
+                response, simulate_output = simulate(
                     ingested,
                     source_file=source_file,
                     api_key=api_key,
                     model=resolved_model,
+                    provider=provider,
                 )
                 responses[intent] = response
 
@@ -238,6 +245,7 @@ def dispatch(
                     modification_request=msg,
                     api_key=api_key,
                     model=resolved_model,
+                    provider=provider,
                 )
                 responses[intent] = response
                 # Auto-audit: append audit findings to the proposed modification
@@ -246,16 +254,18 @@ def dispatch(
                     context=response,
                     api_key=api_key,
                     model=resolved_model,
+                    provider=provider,
                 )
                 responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
 
         elif intent == "generate":
             msg = _ctx_prefix + user_message
-            response, _ = generate(
+            response, generated_xslt = generate(
                 generation_request=msg,
                 source_sample=source_file,
                 api_key=api_key,
                 model=resolved_model,
+                provider=provider,
             )
             responses[intent] = response
             # Auto-audit: append audit findings to the generated XSLT
@@ -265,6 +275,7 @@ def dispatch(
                     context=response,
                     api_key=api_key,
                     model=resolved_model,
+                    provider=provider,
                 )
                 responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
 
@@ -279,6 +290,7 @@ def dispatch(
                     ingested,
                     api_key=api_key,
                     model=resolved_model,
+                    provider=provider,
                 )
                 responses[intent] = response
 
@@ -308,6 +320,8 @@ def dispatch(
         "ingested":           ingested,
         "audit_dict":         audit_dict,
         "patched_xslt":       patched_xslt,
+        "generated_xslt":     generated_xslt,
+        "simulate_output":    simulate_output,
         "session":            session,
         "primary_file_name":  _primary_file_name,
     }
@@ -321,6 +335,7 @@ def dispatch_folder(
     top_k: int = 5,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    provider: str = "groq",
 ) -> dict:
     """
     Index a folder of mapping files (if not already indexed) and answer a
@@ -356,7 +371,8 @@ def dispatch_folder(
     except ImportError:
         from rag_engine import index_folder, query_folder  # type: ignore
 
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    from .llm_client import DEFAULT_MODELS
+    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     index_result = index_folder(
         folder_path=folder_path,
@@ -370,6 +386,7 @@ def dispatch_folder(
         top_k=top_k,
         api_key=api_key,
         model=resolved_model,
+        provider=provider,
     )
 
     return {

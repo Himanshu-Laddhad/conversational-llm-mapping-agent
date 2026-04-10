@@ -55,11 +55,11 @@ Usage (standalone test)::
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from dotenv import load_dotenv
-from groq import Groq
 
 # Load .env from module directory or one level up
 _here = Path(__file__).resolve().parent
@@ -126,6 +126,7 @@ def generate(
     source_sample: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    provider: str = "groq",
 ) -> Tuple[str, Any]:
     """
     Generate a new XSLT 2.0 mapping stylesheet from a plain-English description.
@@ -154,13 +155,13 @@ def generate(
     if not generation_request or not generation_request.strip():
         raise ValueError("generation_request must be a non-empty string")
 
-    key = api_key or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
     if not key:
-        raise ValueError(
-            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
-        )
+        raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     # ── Optionally load source XML sample ────────────────────────────────────
     source_text: Optional[str] = None
@@ -200,19 +201,27 @@ def generate(
 
     user_message = "\n".join(parts)
 
-    # ── Call Groq ─────────────────────────────────────────────────────────────
-    client = Groq(api_key=key)
-    response = client.chat.completions.create(
-        model=resolved_model,
+    # ── Call LLM ──────────────────────────────────────────────────────────────
+    llm_text = chat_complete(
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user",   "content": user_message},
         ],
+        api_key=key,
+        model=resolved_model,
+        provider=provider,
         temperature=0.2,
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
 
-    return (response.choices[0].message.content or "").strip(), None
+    # Extract the raw XSLT from the ```xml ... ``` fence the LLM is instructed
+    # to use (system prompt line: "Return the XSLT inside a ```xml code fence").
+    raw_xslt: Optional[str] = None
+    m = re.search(r"```xml\s*([\s\S]*?)```", llm_text)
+    if m:
+        raw_xslt = m.group(1).strip()
+
+    return llm_text, raw_xslt
 
 
 # ── CLI test harness ──────────────────────────────────────────────────────────
