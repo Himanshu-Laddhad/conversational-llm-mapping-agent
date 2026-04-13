@@ -3,18 +3,27 @@ simulation_engine.py
 ────────────────────
 Simulate / validate a mapping against source data.
 
-Pipeline
-────────
-1. Parse the source input file (D365 XML) via file_ingestion.
-2. Attempt an actual XSLT execution using lxml (XSLT 1.0 only).
-   • Most MapForce XSLT files are 2.0 — lxml will raise an error for 2.0 features.
-   • Catch that gracefully and fall back to LLM simulation.
-3. LLM simulation path: send the parsed XSLT rules + source XML to Groq and ask it
-   to reason through what the output would be, field-by-field.
-   This is often more useful than raw XML for analyst users because the LLM can
-   explain WHY each output field has its value.
-4. Return (response_str, None) — mirrors the groq_agent.explain() return shape.
-   Pass the returned agent as None; simulate is stateless (no multi-turn needed).
+Execution hierarchy
+───────────────────
+1. Detect Altova extension functions in the XSLT.
+   If found → skip all processors (neither Saxon nor lxml can run Altova-specific
+   extensions) and fall back to LLM simulation with a clear note to the user.
+
+2. Try Saxon-HE via saxonche (XSLT 2.0 / 3.0 support).
+   Most Altova MapForce XSLT files target version 2.0, so Saxon is the right
+   first-choice processor. If Saxon succeeds → ground-truth XML is returned and
+   fed to the LLM for analysis; LLM simulation is NOT used.
+
+3. If Saxon fails for any reason other than Altova extensions, fall back to
+   lxml (XSLT 1.0 only). If the stylesheet uses only 1.0 features, lxml will
+   succeed and its output is used as ground truth.
+
+4. If both processors fail → LLM simulation: send the parsed XSLT rules and
+   source XML to Groq and ask it to reason through the transformation field by
+   field. This is often more useful than raw XML for analyst users because the
+   LLM can explain WHY each field has its value.
+
+5. Return (response_str, None) — mirrors the groq_agent.explain() return shape.
 
 Usage (as module)::
 
@@ -35,10 +44,12 @@ Usage (standalone test)::
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from dotenv import load_dotenv
+from groq import Groq
 
 # Load .env from module directory or one level up
 _here = Path(__file__).resolve().parent
@@ -49,20 +60,30 @@ for _candidate in [_here / ".env", _here.parent / ".env"]:
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-# TPM budget on Groq on-demand tier varies by model.
-# llama-3.3-70b-versatile: ~12 000 TPM; llama-3.1-8b-instant: ~6 000 TPM.
-# We target ≤ 4 000 input tokens (≈ 16 000 chars) so there is room for the
-# 1 200-token output budget and a safety margin in both cases.
-
 # Max characters of source XML to include in the LLM prompt (≈ 1 500 tokens).
 _MAX_SOURCE_CHARS = 6_000
 
-# Max characters of XSLT parsed content to include in the LLM context (≈ 2 000 tokens).
+# Max characters of XSLT parsed content in the LLM context (≈ 2 000 tokens).
 _MAX_XSLT_CHARS = 8_000
 
-# Max tokens for LLM output — 1 500 gives good coverage; combined with
-# ~3 000 input tokens stays well within the 12 000 TPM limit.
+# Max tokens for LLM output.
 _MAX_OUTPUT_TOKENS = 1_500
+
+# Patterns that indicate actual Altova extension FUNCTION CALLS (not just
+# namespace declarations).  Many MapForce XSLTs declare the altova namespace
+# but never invoke it — Saxon handles those fine.  We only bail out when
+# extension functions are genuinely called.
+#
+# Pattern: the namespace prefix followed by a colon and a function name then "("
+# e.g.  altova:format-date(  altovaext:node-set(  fn-user-defined:foo(
+_ALTOVA_CALL_PATTERN: re.Pattern = re.compile(
+    r"\baltova(ext)?:[A-Za-z_][\w-]*\s*\(",
+    re.IGNORECASE,
+)
+_ALTOVA_FN_USER_PATTERN: re.Pattern = re.compile(
+    r"\bfn-user-defined:[A-Za-z_][\w-]*\s*\(",
+    re.IGNORECASE,
+)
 
 _SYSTEM_PROMPT = """\
 You are an expert EDI/XSLT transformation analyst working with Altova MapForce \
@@ -91,189 +112,121 @@ analysis that shows:
 Be concise but complete. Use a structured format with clear section headers.
 """
 
+# ── Altova extension detection ────────────────────────────────────────────────
 
-def simulate(
-    ingested: dict,
-    source_file: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model: Optional[str] = None,
-    provider: str = "groq",
-) -> Tuple[str, Optional[str]]:
+def _detect_altova_extensions(raw_xslt: str) -> bool:
     """
-    Simulate / validate a mapping against source data.
+    Return True if the XSLT *calls* Altova-specific extension functions that
+    Saxon-HE and lxml cannot execute.
 
-    Args:
-        ingested:     Output dict from file_ingestion.ingest_file() for the
-                      XSLT / mapping file.
-        source_file:  Path to the source XML input file (e.g. SourceFile.txt
-                      from a MappingData test case). Optional — if not provided,
-                      a dry-run analysis is performed instead.
-        api_key:      Groq API key. Falls back to GROQ_API_KEY env var.
-        model:        Groq model identifier. Falls back to GROQ_MODEL env var,
-                      then llama-3.1-8b-instant.
-
-    Returns:
-        (response_str, None) where response_str is the simulation analysis.
-        The second element is always None (simulate is stateless).
-
-    Raises:
-        TypeError:  If ingested is not a dict.
-        ValueError: If ingested is missing required keys or no API key found.
+    Many MapForce stylesheets declare the altova: namespace (xmlns:altova=...)
+    but never actually call any extension functions — Saxon handles those fine.
+    We only block processing when extension functions are genuinely invoked,
+    i.e. when we see patterns like:
+        altova:format-date(   altovaext:node-set(   fn-user-defined:foo(
     """
-    # ── Validate inputs ───────────────────────────────────────────────────────
-    if not isinstance(ingested, dict):
-        raise TypeError(f"ingested must be a dict, got {type(ingested).__name__}")
-    if "parsed_content" not in ingested:
-        raise ValueError("ingested dict is missing 'parsed_content' key")
-
-    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
-    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
-    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
-    if not key:
-        raise ValueError(f"API key required for provider {provider!r}.")
-
-    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
-
-    # ── Step 1: Try actual XSLT execution (lxml — XSLT 1.0 only) ─────────────
-    xslt_result_xml: Optional[str] = None
-    xslt_error: Optional[str] = None
-
-    raw_xslt = ingested.get("parsed_content", {}).get("raw_xml") or \
-               ingested.get("parsed_content", {}).get("raw_text")
-
-    execution_engine = "llm_simulation"   # updated below if real execution works
-
-    if raw_xslt and source_file and Path(source_file).exists():
-        # Try Saxon/C first — supports XSLT 2.0 and 3.0 (no JVM required)
-        xslt_result_xml, xslt_error = _try_saxonche_transform(raw_xslt, str(source_file))
-        if xslt_result_xml:
-            execution_engine = "Saxon (XSLT 2.0/3.0)"
-        else:
-            # Fall back to lxml — reliable for XSLT 1.0
-            lxml_result, lxml_error = _try_lxml_transform(raw_xslt, str(source_file))
-            if lxml_result:
-                xslt_result_xml = lxml_result
-                xslt_error      = None
-                execution_engine = "lxml (XSLT 1.0)"
-            else:
-                # Both real engines failed; surface the Saxon error (more informative)
-                xslt_error = (
-                    f"Saxon: {xslt_error or 'failed'}  |  lxml: {lxml_error or 'failed'}"
-                )
-
-    # ── Step 2: Load source file content for LLM context ─────────────────────
-    source_xml_text: Optional[str] = None
-    if source_file and Path(source_file).exists():
-        try:
-            source_xml_text = Path(source_file).read_text(encoding="utf-8", errors="replace")
-            if len(source_xml_text) > _MAX_SOURCE_CHARS:
-                source_xml_text = (
-                    source_xml_text[:_MAX_SOURCE_CHARS]
-                    + f"\n... [truncated at {_MAX_SOURCE_CHARS} chars] ..."
-                )
-        except OSError as exc:
-            source_xml_text = f"[Could not read source file: {exc}]"
-
-    # ── Step 3: Build LLM user message ───────────────────────────────────────
-    user_message = _build_user_message(
-        ingested=ingested,
-        source_xml_text=source_xml_text,
-        xslt_result_xml=xslt_result_xml,
-        xslt_error=xslt_error,
-        source_file=source_file,
-        execution_engine=execution_engine,
-    )
-
-    # ── Step 4: Call LLM (explain real output, or simulate if no output) ──────
-    llm_response = chat_complete(
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user",   "content": user_message},
-        ],
-        api_key=key,
-        model=resolved_model,
-        provider=provider,
-        temperature=0.2,
-        max_tokens=_MAX_OUTPUT_TOKENS,
-    )
-
-    # Prepend a clear execution status line so the user knows what actually ran
-    if xslt_result_xml:
-        status_line = f"**Executed with {execution_engine}** — actual output below.\n\n"
-    else:
-        status_line = f"**LLM simulation** (real execution unavailable: {xslt_error or 'no source file'}).\n\n"
-
-    return status_line + llm_response, xslt_result_xml
+    if _ALTOVA_CALL_PATTERN.search(raw_xslt):
+        return True
+    if _ALTOVA_FN_USER_PATTERN.search(raw_xslt):
+        return True
+    return False
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _try_saxonche_transform(raw_xslt: str, source_path: str) -> Tuple[Optional[str], Optional[str]]:
+def _detect_xslt_version(raw_xslt: str) -> str:
     """
-    Attempt XSLT 2.0/3.0 transformation using Saxon/C via saxonche.
-
-    Saxon is the reference XSLT 2.0/3.0 processor. saxonche wraps Saxon/C
-    (the C port of the Java Saxon library) so no JVM is required.
-    Install with: pip install saxonche
-
-    Returns (output_xml_str, None)     on success.
-    Returns (None, error_message)      on failure or if saxonche is not installed.
+    Extract the declared XSLT version from the stylesheet element.
+    Returns '2.0', '3.0', '1.0', or 'unknown'.
     """
-    import os
-    import tempfile
+    m = re.search(r'<xsl:stylesheet[^>]+version=["\']([^"\']+)["\']', raw_xslt)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'<xsl:transform[^>]+version=["\']([^"\']+)["\']', raw_xslt)
+    if m:
+        return m.group(1).strip()
+    return "unknown"
 
+
+# ── Saxon-HE transform (XSLT 2.0 / 3.0) ─────────────────────────────────────
+
+def _try_saxon_transform(
+    raw_xslt: str, source_path: str
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Attempt an XSLT 2.0/3.0 transformation using Saxon-HE (saxonche).
+
+    Returns (output_xml_str, None)  on success.
+    Returns (None, error_message)   on failure.
+    """
     try:
-        from saxonche import PySaxonProcessor   # type: ignore
+        from saxonche import PySaxonProcessor  # type: ignore
     except ImportError:
-        return None, "saxonche not installed — run: pip install saxonche"
+        return None, (
+            "saxonche is not installed. Run: pip install saxonche --break-system-packages"
+        )
 
-    xslt_tmp = None
     try:
-        # Write the XSLT string to a temp file so Saxon can resolve any
-        # relative xsl:import / xsl:include paths from the same directory.
-        with tempfile.NamedTemporaryFile(
-            suffix=".xsl", mode="w", encoding="utf-8", delete=False
-        ) as f:
-            f.write(raw_xslt)
-            xslt_tmp = f.name
-
         with PySaxonProcessor(license=False) as proc:
             xslt30 = proc.new_xslt30_processor()
-            executable = xslt30.compile_stylesheet(stylesheet_file=xslt_tmp)
+
+            # ── Compile the stylesheet ────────────────────────────────────────
+            executable = xslt30.compile_stylesheet(stylesheet_text=raw_xslt)
+
+            # saxonche signals errors through exception_occurred / error_message
+            if xslt30.exception_occurred:
+                err = xslt30.error_message or "Unknown compilation error"
+                xslt30.clear_exception()
+                return None, f"Saxon compilation error: {err}"
 
             if executable is None:
-                err = getattr(xslt30, "error_message", None) or "Unknown compilation error"
-                return None, f"Saxon compilation failed: {err}"
+                return None, "Saxon returned no executable — stylesheet may be invalid."
 
-            output = executable.transform_to_string(source_file=source_path)
+            # ── Parse the source document ─────────────────────────────────────
+            source_node = proc.parse_xml(xml_file_name=str(source_path))
 
-            if output is None:
-                err = (
-                    getattr(executable, "error_message", None)
-                    or getattr(xslt30, "error_message", None)
-                    or "Transformation returned no output"
-                )
+            if proc.exception_occurred:
+                err = proc.error_message or "Unknown parse error"
+                proc.clear_exception()
+                return None, f"Saxon source parse error: {err}"
+
+            if source_node is None:
+                return None, "Saxon could not parse the source file as XML."
+
+            # ── Apply templates ───────────────────────────────────────────────
+            result = executable.apply_templates_returning_string(
+                xdm_value=source_node
+            )
+
+            if executable.exception_occurred:
+                err = executable.error_message or "Unknown transform error"
+                executable.clear_exception()
                 return None, f"Saxon transform error: {err}"
 
-            return output.strip(), None
+            if result is None:
+                # Some stylesheets use named entry templates; try the default
+                executable.set_global_context_item(xdm_item=source_node)
+                result = executable.call_template_returning_string()
 
-    except Exception as exc:
-        return None, str(exc)
+                if executable.exception_occurred:
+                    err = executable.error_message or "No output produced"
+                    executable.clear_exception()
+                    return None, f"Saxon call-template error: {err}"
 
-    finally:
-        if xslt_tmp:
-            try:
-                os.unlink(xslt_tmp)
-            except OSError:
-                pass
+            return (str(result) if result else None), None
+
+    except Exception as exc:  # noqa: BLE001
+        return None, f"Saxon exception: {exc}"
 
 
-def _try_lxml_transform(raw_xslt: str, source_path: str) -> Tuple[Optional[str], Optional[str]]:
+# ── lxml transform (XSLT 1.0 fallback) ───────────────────────────────────────
+
+def _try_lxml_transform(
+    raw_xslt: str, source_path: str
+) -> Tuple[Optional[str], Optional[str]]:
     """
     Attempt an XSLT transformation using lxml (XSLT 1.0 only).
 
     Returns (output_xml_str, None) on success.
-    Returns (None, error_message)   on failure (e.g. XSLT 2.0 feature used).
+    Returns (None, error_message)  on failure (e.g. XSLT 2.0 features used).
     """
     try:
         from lxml import etree  # type: ignore
@@ -283,18 +236,206 @@ def _try_lxml_transform(raw_xslt: str, source_path: str) -> Tuple[Optional[str],
         transform   = etree.XSLT(xslt_tree)
         result      = transform(source_tree)
 
-        # Only discard the real output for fatal/error-level entries;
-        # warnings (e.g. unsupported extension hints) do not invalidate the result.
         errors = transform.error_log
-        fatal = [e for e in errors if e.level_name in ("FATAL_ERROR", "ERROR")]
-        if fatal:
-            msgs = "; ".join(str(e) for e in fatal)
-            return None, f"lxml XSLT transform errors: {msgs}"
+        if errors:
+            msgs = "; ".join(str(e) for e in errors)
+            return None, f"lxml XSLT transform warnings/errors: {msgs}"
 
         return str(result), None
 
     except Exception as exc:  # noqa: BLE001
         return None, str(exc)
+
+
+# ── Main simulate() function ──────────────────────────────────────────────────
+
+def simulate(
+    ingested: dict,
+    source_file: Optional[str] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Tuple[str, Any]:
+    """
+    Simulate / validate a mapping against source data.
+
+    Execution order:
+      1. Detect Altova extensions → LLM fallback with explanation if found.
+      2. Saxon-HE (XSLT 2.0/3.0) — ground-truth execution.
+      3. lxml (XSLT 1.0) — fallback if Saxon fails.
+      4. LLM simulation — last resort.
+
+    Args:
+        ingested:     Output dict from file_ingestion.ingest_file() for the
+                      XSLT / mapping file.
+        source_file:  Path to the source XML input file (e.g. SourceFile.txt).
+                      Optional — if not provided, a dry-run analysis is performed.
+        api_key:      Groq API key. Falls back to GROQ_API_KEY env var.
+        model:        Groq model identifier. Falls back to GROQ_MODEL env var,
+                      then llama-3.3-70b-versatile.
+
+    Returns:
+        (response_str, None) where response_str is the simulation analysis.
+        The second element is always None (simulate is stateless).
+    """
+    # ── Validate inputs ───────────────────────────────────────────────────────
+    if not isinstance(ingested, dict):
+        raise TypeError(f"ingested must be a dict, got {type(ingested).__name__}")
+    if "parsed_content" not in ingested:
+        raise ValueError("ingested dict is missing 'parsed_content' key")
+
+    key = api_key or os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise ValueError(
+            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
+        )
+
+    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+    # ── Extract raw XSLT source ───────────────────────────────────────────────
+    raw_xslt: Optional[str] = (
+        ingested.get("parsed_content", {}).get("raw_xml")
+        or ingested.get("parsed_content", {}).get("raw_text")
+    )
+
+    xslt_result_xml: Optional[str] = None
+    xslt_error:      Optional[str] = None
+    processor_used:  str           = "none"
+    altova_detected: bool          = False
+
+    # ── Step 1: Detect Altova extensions ──────────────────────────────────────
+    if raw_xslt:
+        altova_detected = _detect_altova_extensions(raw_xslt)
+        xslt_version    = _detect_xslt_version(raw_xslt)
+    else:
+        xslt_version    = "unknown"
+
+    if altova_detected:
+        # Known limitation — no external processor can run Altova extensions.
+        # Fall straight through to LLM simulation with a clear explanation.
+        xslt_error = (
+            "This XSLT uses Altova-specific extension functions "
+            "(altova:* namespace). These are proprietary to Altova MapForce and "
+            "cannot be executed by Saxon-HE or lxml. "
+            "Falling back to LLM-based simulation."
+        )
+        processor_used = "llm (altova extensions)"
+
+    elif raw_xslt and source_file and Path(source_file).exists():
+
+        # ── Step 2: Try Saxon-HE (XSLT 2.0 / 3.0) ───────────────────────────
+        xslt_result_xml, xslt_error = _try_saxon_transform(raw_xslt, str(source_file))
+
+        if xslt_result_xml is not None:
+            processor_used = f"Saxon-HE 12.9 (XSLT {xslt_version})"
+        else:
+            # ── Step 3: Try lxml (XSLT 1.0 fallback) ─────────────────────────
+            lxml_result, lxml_error = _try_lxml_transform(raw_xslt, str(source_file))
+
+            if lxml_result is not None:
+                xslt_result_xml = lxml_result
+                # Keep the Saxon error as context for the LLM if both tried
+                xslt_error      = None
+                processor_used  = "lxml (XSLT 1.0)"
+            else:
+                # Both processors failed — LLM simulation
+                # Prefer the Saxon error message (more informative for 2.0 files)
+                processor_used  = "llm (both processors failed)"
+                # xslt_error already holds the Saxon error
+
+    elif not source_file or not Path(str(source_file)).exists():
+        processor_used = "llm (no source file — dry-run)"
+
+    # ── Step 4: Load source file text for LLM context ────────────────────────
+    source_xml_text: Optional[str] = None
+    if source_file and Path(str(source_file)).exists():
+        try:
+            source_xml_text = Path(str(source_file)).read_text(
+                encoding="utf-8", errors="replace"
+            )
+            if len(source_xml_text) > _MAX_SOURCE_CHARS:
+                source_xml_text = (
+                    source_xml_text[:_MAX_SOURCE_CHARS]
+                    + f"\n... [truncated at {_MAX_SOURCE_CHARS} chars] ..."
+                )
+        except OSError as exc:
+            source_xml_text = f"[Could not read source file: {exc}]"
+
+    # ── Step 5: Build LLM prompt ──────────────────────────────────────────────
+    user_message = _build_user_message(
+        ingested=ingested,
+        source_xml_text=source_xml_text,
+        xslt_result_xml=xslt_result_xml,
+        xslt_error=xslt_error,
+        source_file=source_file,
+        processor_used=processor_used,
+        altova_detected=altova_detected,
+    )
+
+    # ── Step 6: Call Groq ─────────────────────────────────────────────────────
+    client = Groq(api_key=key)
+    response = client.chat.completions.create(
+        model=resolved_model,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user",   "content": user_message},
+        ],
+        temperature=0.2,
+        max_tokens=_MAX_OUTPUT_TOKENS,
+    )
+
+    llm_text = response.choices[0].message.content.strip()
+
+    # Prepend the processor banner so the user always knows what ran
+    banner = _build_processor_banner(
+        processor_used=processor_used,
+        xslt_version=xslt_version,
+        altova_detected=altova_detected,
+        xslt_error=xslt_error if xslt_result_xml is None else None,
+    )
+
+    return banner + llm_text, None
+
+
+# ── Message builder ───────────────────────────────────────────────────────────
+
+def _build_processor_banner(
+    processor_used: str,
+    xslt_version: str,
+    altova_detected: bool,
+    xslt_error: Optional[str],
+) -> str:
+    """Return a short banner prepended to the LLM response explaining what ran."""
+    if "Saxon" in processor_used:
+        return (
+            f"> **Simulation engine:** Saxon-HE 12.9 — "
+            f"actual XSLT {xslt_version} execution ✅  \n"
+            f"> The output below is the **real transform result**, not an estimate.\n\n"
+        )
+    elif "lxml" in processor_used:
+        return (
+            f"> **Simulation engine:** lxml (XSLT 1.0) — "
+            f"actual execution ✅  \n"
+            f"> The output below is the **real transform result**.\n\n"
+        )
+    elif altova_detected:
+        return (
+            "> ⚠️ **Altova extension functions detected.**  \n"
+            "> Saxon-HE and lxml cannot run Altova-specific extensions (`altova:*` namespace).  \n"
+            "> This is a known limitation of any XSLT processor that is not Altova MapForce itself.  \n"
+            "> The analysis below is an **LLM-based simulation** — accurate for field mapping logic "
+            "but cannot reproduce Altova function outputs.\n\n"
+        )
+    elif xslt_error:
+        return (
+            f"> ⚠️ **Processor note:** Both Saxon-HE and lxml could not execute this stylesheet.  \n"
+            f"> Reason: `{xslt_error[:200]}`  \n"
+            f"> Falling back to **LLM-based simulation**.\n\n"
+        )
+    else:
+        return (
+            "> ℹ️ **Dry-run mode** — no source file provided.  \n"
+            "> Showing what this mapping *would* produce for a typical input.\n\n"
+        )
 
 
 def _build_user_message(
@@ -303,9 +444,10 @@ def _build_user_message(
     xslt_result_xml: Optional[str],
     xslt_error: Optional[str],
     source_file: Optional[str],
-    execution_engine: str = "llm_simulation",
+    processor_used: str,
+    altova_detected: bool,
 ) -> str:
-    """Compose the user-turn message for the LLM simulation/analysis prompt."""
+    """Compose the user-turn message for the LLM simulation prompt."""
 
     parts: list[str] = []
 
@@ -317,8 +459,7 @@ def _build_user_message(
 
     parts.append(f"## Mapping File\nName: {file_name}  |  Type: {file_type}\n")
 
-    # For simulation we only need the mapping rules, not schema/namespace metadata.
-    # This keeps the prompt well within the Groq TPM limits.
+    # Structured mapping rules (preferred — more concise than raw XML)
     structured_keys = ["field_mappings", "hardcoded_values", "templates"]
     structured = {k: parsed[k] for k in structured_keys if k in parsed and parsed[k]}
 
@@ -333,13 +474,15 @@ def _build_user_message(
     elif parsed.get("raw_xml"):
         raw = parsed["raw_xml"]
         if len(raw) > _MAX_XSLT_CHARS:
-            raw = raw[:_MAX_XSLT_CHARS] + f"\n... [truncated] ..."
+            raw = raw[:_MAX_XSLT_CHARS] + "\n... [truncated] ..."
         parts.append(f"### XSLT Raw XML\n```xml\n{raw}\n```\n")
 
     # ── Source data ───────────────────────────────────────────────────────────
     if source_xml_text:
-        src_name = Path(source_file).name if source_file else "source"
-        parts.append(f"## Source Input File ({src_name})\n```xml\n{source_xml_text}\n```\n")
+        src_name = Path(str(source_file)).name if source_file else "source"
+        parts.append(
+            f"## Source Input File ({src_name})\n```xml\n{source_xml_text}\n```\n"
+        )
     else:
         parts.append(
             "## Source Input File\n"
@@ -348,38 +491,49 @@ def _build_user_message(
             "the XSLT templates and hardcoded values above.\n"
         )
 
-    # ── Real transform output (saxonche or lxml) or failure note ─────────────
+    # ── Actual processor output (if available) ────────────────────────────────
     if xslt_result_xml:
         preview = xslt_result_xml[:3_000]
         if len(xslt_result_xml) > 3_000:
-            preview += "\n... [output truncated for context — full XML available as download] ..."
+            preview += "\n... [truncated — full output is longer] ..."
         parts.append(
-            f"## Actual Transform Output ({execution_engine})\n"
-            f"The stylesheet was executed successfully. "
-            f"Here is the real output — use this as ground truth:\n"
+            f"## Actual Transform Output ({processor_used})\n"
+            f"The XSLT processor successfully executed the stylesheet. "
+            f"Here is the actual output:\n"
             f"```xml\n{preview}\n```\n"
+            f"Use this as ground truth for your analysis.\n"
         )
-    elif xslt_error:
+    elif xslt_error and not altova_detected:
         parts.append(
-            f"## Transform Execution Failed\n"
-            f"Real execution was not possible. Error: `{xslt_error}`\n"
-            f"Perform a **LLM-based simulation** instead.\n"
+            f"## Processor Attempt\n"
+            f"Both Saxon-HE and lxml could not execute this stylesheet.\n"
+            f"Error: `{xslt_error}`\n"
+            f"Perform an **LLM-based simulation** instead.\n"
+        )
+    elif altova_detected:
+        parts.append(
+            "## Processor Note\n"
+            "This stylesheet uses Altova-specific extension functions "
+            "(`altova:*`) that no third-party processor can execute. "
+            "Please simulate the transformation using only the template logic "
+            "and field mappings visible in the XSLT structure above, "
+            "and note which fields depend on Altova extension functions.\n"
         )
 
     # ── Task instruction ──────────────────────────────────────────────────────
     if xslt_result_xml:
         task = (
-            "The ACTUAL transformation output is shown above. "
-            "Analyse it segment by segment against the mapping rules and source data. "
-            "Explain what each output field contains, which source fields it came from, "
-            "which conditional logic fired, and flag any potential issues."
+            "The actual transformation output is provided above. "
+            "Analyse it against the mapping rules and source data. "
+            "Explain what happened for each key segment, note any conditional "
+            "logic that fired or was skipped, and flag any data quality issues."
         )
     else:
         task = (
-            "Real execution failed or no source file was provided. "
             "Simulate this transformation: walk through the XSLT templates, "
             "apply them to the source data above, and show what the output "
-            "would look like field-by-field. Identify any data quality issues."
+            "would look like field-by-field. Identify any data quality issues "
+            "or source fields that are missing/empty."
         )
 
     parts.append(f"## Your Task\n{task}\n")
@@ -394,16 +548,21 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 80)
     print("  SIMULATION ENGINE — Mapping Transform Validator")
+    print("  Execution order: Saxon-HE → lxml → LLM simulation")
     print("=" * 80 + "\n")
 
     if len(sys.argv) < 2:
         print("Usage: python modules/simulation_engine.py <xslt_file> [source_file]\n")
         print("Examples:")
-        print('  python modules/simulation_engine.py "MappingData/MappingData/810_C-000340_OUT/810_NordStrom_Xslt_11-08-2023.xml" "MappingData/MappingData/810_C-000340_OUT/810/0413e4fc-4bf0-4157-823b-e9fcd8b94d2b/SourceFile.txt"')
+        print(
+            '  python modules/simulation_engine.py '
+            '"MappingData/810_C-000340_OUT/810_NordStrom_Xslt_11-08-2023.xml" '
+            '"MappingData/810_C-000340_OUT/810/0413e4fc.../SourceFile.txt"'
+        )
         sys.exit(0)
 
-    xslt_path   = sys.argv[1]
-    src_path    = sys.argv[2] if len(sys.argv) > 2 else None
+    xslt_path = sys.argv[1]
+    src_path  = sys.argv[2] if len(sys.argv) > 2 else None
 
     if not Path(xslt_path).exists():
         print(f"[ERROR] XSLT file not found: {xslt_path}")
@@ -413,17 +572,24 @@ if __name__ == "__main__":
         print(f"[ERROR] Source file not found: {src_path}")
         sys.exit(1)
 
-    # Ingest the XSLT mapping file
     try:
         from .file_ingestion import ingest_file
     except ImportError:
         from file_ingestion import ingest_file  # standalone execution
 
-    print(f"[INGEST] {xslt_path}")
+    print(f"[INGEST ] {xslt_path}")
     ingested = ingest_file(file_path=xslt_path)
-    print(f"[TYPE  ] {ingested.get('file_type', 'unknown')}")
+    print(f"[TYPE   ] {ingested.get('metadata', {}).get('file_type', 'unknown')}")
+    raw = (
+        ingested.get("parsed_content", {}).get("raw_xml")
+        or ingested.get("parsed_content", {}).get("raw_text")
+        or ""
+    )
+    version = _detect_xslt_version(raw)
+    altova  = _detect_altova_extensions(raw)
+    print(f"[XSLT   ] version={version}  altova_extensions={altova}")
     if src_path:
-        print(f"[SOURCE] {src_path}")
+        print(f"[SOURCE ] {src_path}")
     print()
 
     print("[SIMULATE] Running …\n")

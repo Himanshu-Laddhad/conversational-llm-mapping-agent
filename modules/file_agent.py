@@ -9,6 +9,7 @@ context retention.
 import json
 import os
 from typing import Optional, Iterator
+from groq import Groq
 from dotenv import load_dotenv
 
 
@@ -21,38 +22,31 @@ class FileAgent:
         self,
         groq_api_key: Optional[str] = None,
         model: Optional[str] = None,
-        provider: str = "groq",
-        api_key: Optional[str] = None,
+        api_key: Optional[str] = None,       # alias used by groq_agent.py
+        provider: Optional[str] = None,      # accepted for compat; Groq only for now
     ):
         """
         Initialize the FileAgent.
-        
+
         Args:
-            groq_api_key: API key (legacy param name kept for backward compat).
-            api_key:      API key for the selected provider (takes precedence).
-            model:        Model identifier. Falls back to GROQ_MODEL env var.
-            provider:     LLM provider: "groq", "openai", "nvidia_nim", "anthropic".
+            groq_api_key: Groq API key (loads from .env if not provided)
+            api_key:      Alias for groq_api_key (used by collaborator groq_agent.py)
+            model:        Groq model to use. Falls back to GROQ_MODEL env var.
+            provider:     LLM provider string (accepted but ignored; Groq only).
         """
+        # Load environment variables
         load_dotenv()
 
-        from .llm_client import PROVIDERS, DEFAULT_MODELS
-        self.provider = provider
-
-        # api_key wins; fall back to legacy groq_api_key param; then env var
-        env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
-        self.api_key = (
-            api_key
-            or groq_api_key
-            or os.getenv(env_key_name)
-            or os.getenv("GROQ_API_KEY")
-        )
-        if not self.api_key:
+        # Get API key from argument or environment (support both param names)
+        api_key = api_key or groq_api_key or os.getenv("GROQ_API_KEY")
+        if not api_key:
             raise ValueError(
-                f"API key required for provider {provider!r}. "
-                f"Set {env_key_name} in .env or pass api_key=."
+                "GROQ_API_KEY must be provided as argument or set in .env file"
             )
-
-        self.model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
+        
+        # Initialize Groq client
+        self.client = Groq(api_key=api_key)
+        self.model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         
         # Initialize conversation state
         self.history = []
@@ -88,20 +82,35 @@ class FileAgent:
         # Reset conversation history
         self.history = []
 
-        # Cap raw text fields before serializing to avoid exceeding LLM token limits.
-        # Large files (e.g. 900-line XSLTs) store full source in raw_xml / raw_text.
-        # 1 token ≈ 4 chars; capping at 20 000 chars keeps the prompt under ~6 000 tokens.
-        _MAX_RAW = 20_000
+        # ── Token-budget enforcement ──────────────────────────────────────────
+        # Groq on-demand free tier: 12 000 TPM (tokens per minute).
+        # 1 token ≈ 4 chars.  The system prompt + XSLT instructions already
+        # consume ~2 000 tokens, leaving ~8 000 tokens for the file JSON.
+        # Cap raw_xml/raw_text at 6 000 chars (~1 500 tokens) and the whole
+        # serialised JSON at 24 000 chars (~6 000 tokens) to stay safely under
+        # the 12 000 TPM limit even with conversation history building up.
+        _MAX_RAW_FIELD  = 6_000    # per raw_xml / raw_text field
+        _MAX_JSON_TOTAL = 24_000   # entire serialised ingested JSON
+
         ingested_for_prompt = ingested.copy()
         if isinstance(ingested_for_prompt.get("parsed_content"), dict):
             pc = dict(ingested_for_prompt["parsed_content"])
             for _field in ("raw_xml", "raw_text"):
-                if isinstance(pc.get(_field), str) and len(pc[_field]) > _MAX_RAW:
-                    pc[_field] = pc[_field][:_MAX_RAW] + f"\n... [truncated — {len(pc[_field])} total chars]"
+                if isinstance(pc.get(_field), str) and len(pc[_field]) > _MAX_RAW_FIELD:
+                    pc[_field] = (
+                        pc[_field][:_MAX_RAW_FIELD]
+                        + f"\n... [truncated — {len(pc[_field])} total chars; "
+                        "full source available for simulation/modify]"
+                    )
             ingested_for_prompt["parsed_content"] = pc
 
-        # Serialize the (possibly truncated) ingested dict to JSON
+        # Serialize and enforce the overall JSON cap
         json_string = json.dumps(ingested_for_prompt, indent=2, ensure_ascii=False)
+        if len(json_string) > _MAX_JSON_TOTAL:
+            json_string = (
+                json_string[:_MAX_JSON_TOTAL]
+                + f'\n  "...": "[truncated at {_MAX_JSON_TOTAL} chars to fit token budget]"'
+            )
         
         # Extract metadata for system message
         file_type = self.file_metadata.get("file_type", "unknown")
@@ -244,34 +253,37 @@ Because this is an X12 XML file generated by Altova MapForce (an XML representat
             "role": "user",
             "content": user_message
         })
-
-        # Streaming is only supported for OpenAI-compatible providers.
-        # For Anthropic (and as a general fallback) we run non-streaming and
-        # yield the full reply as a single synthetic chunk so callers that
-        # iterate the generator still work.
-        from .llm_client import chat_complete
-        response_text = chat_complete(
-            messages=self.history,
-            api_key=self.api_key,
+        
+        # Call Groq API
+        completion = self.client.chat.completions.create(
             model=self.model,
-            provider=self.provider,
-            temperature=0.1,
-            max_tokens=2_000,
+            messages=self.history,
+            stream=stream
         )
-
-        self.history.append({
-            "role": "assistant",
-            "content": response_text,
-        })
-
+        
         if stream:
-            # Return a generator that yields a single synthetic object so
-            # existing callers that iterate the stream still work.
-            def _synthetic_stream():
-                yield response_text
-            return _synthetic_stream()
-
-        return response_text
+            def _stream_and_record():
+                chunks = []
+                for chunk in completion:
+                    text = chunk.choices[0].delta.content or ""
+                    chunks.append(text)
+                    yield chunk
+                self.history.append({
+                    "role": "assistant",
+                    "content": "".join(chunks)
+                })
+            return _stream_and_record()
+        else:
+            # Extract full response
+            response = completion.choices[0].message.content
+            
+            # Append assistant response to history
+            self.history.append({
+                "role": "assistant",
+                "content": response
+            })
+            
+            return response
     
     def append_assistant_message(self, text: str):
         """

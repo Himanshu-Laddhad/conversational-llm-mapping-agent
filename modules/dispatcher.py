@@ -43,6 +43,7 @@ Usage (standalone test):
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
@@ -55,8 +56,68 @@ for _candidate in [_here / ".env", _here.parent / ".env"]:
         break
 
 # Placeholder responses for engines that are not yet built.
-# These are shown in the dispatch result instead of crashing.
-_UNBUILT: dict = {}   # all four engines are now implemented
+_UNBUILT: dict = {}   # all engines are now implemented
+
+# ── Out-of-scope guardrail ────────────────────────────────────────────────────
+# The agent is purpose-built for EDI / XSLT / MapForce mapping intelligence.
+# Any message that clearly contains none of these domain signals is rejected
+# with a friendly redirect — without spending LLM tokens on routing.
+
+_OUT_OF_SCOPE_RESPONSE = (
+    "I'm the **PartnerLinQ Mapping Intelligence Agent** — purpose-built for "
+    "EDI/XSLT mapping analysis.\n\n"
+    "I can help you with:\n"
+    "- **Explain** — what an XSLT mapping does in plain English\n"
+    "- **Simulate** — run a transformation against real source data (Saxon-HE / lxml)\n"
+    "- **Modify** — add fields, change values, add line-item rows\n"
+    "- **Audit** — check a mapping for misconfigurations and production-readiness issues\n"
+    "- **Generate** — create a new XSLT mapping from requirements\n\n"
+    "Please ask a question about your EDI or XSLT mapping files."
+)
+
+# Substring keywords — matched anywhere in the lowercased message.
+_IN_SCOPE_SUBSTRINGS: tuple[str, ...] = (
+    "xslt", "xsl:", "stylesheet", "transformation", "transform",
+    "edi", "x12", "edifact", "flatfile", "flat-file", "flat file",
+    "mapping", "mapforce", "altova", "trading partner",
+    "xml", "d365", "dynamics",
+    "810", "850", "856", "855", "997", "940", "945",
+    "simulate", "simulation", "audit", "segment", "value-of",
+    "apply-template", "partnerlinq", "source file", "target file",
+    "invoice", "purchase order", "ship notice",
+)
+
+# Whole-word keywords — only match when surrounded by word boundaries
+# (avoids "list" matching "st", "sort" matching "or", etc.)
+_IN_SCOPE_WORDS: tuple[str, ...] = (
+    "isa", "gs", "ge", "iea", "beg", "big", "dtm",
+    "n1", "n3", "n4", "it1", "tds", "ctt", "bsn",
+    "xsd", "erp", "sap", "edi", "xml", "xsl",
+    "explain", "modify", "generate",
+    "template", "segment", "mapping", "loop", "field",
+)
+
+_WORD_PATTERN: re.Pattern = re.compile(
+    r"\b(" + "|".join(re.escape(w) for w in _IN_SCOPE_WORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_in_scope(user_message: str) -> bool:
+    """
+    Return True if the message contains at least one EDI/XSLT domain signal.
+    Uses substring matching for long/unambiguous terms and whole-word matching
+    for short EDI keywords (ISA, GS, ST…) to avoid false positives.
+    No LLM tokens spent.
+    """
+    lower = user_message.lower()
+    # Fast substring check for unambiguous long keywords
+    if any(kw in lower for kw in _IN_SCOPE_SUBSTRINGS):
+        return True
+    # Whole-word check for short EDI codes that could appear inside other words
+    if _WORD_PATTERN.search(user_message):
+        return True
+    return False
 
 
 def dispatch(
@@ -67,8 +128,8 @@ def dispatch(
     ingested: Optional[dict] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    provider: str = "groq",
     session: Optional[Any] = None,
+    provider: Optional[str] = None,   # accepted for forward-compat; currently Groq only
 ) -> dict:
     """
     Route a user message and call the appropriate engine(s).
@@ -130,9 +191,8 @@ def dispatch(
         from audit_engine import audit           # type: ignore
         from rag_engine import query_folder      # type: ignore
 
-    # ── Resolve model (caller > env var > provider default) ──────────────────
-    from .llm_client import DEFAULT_MODELS
-    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
+    # ── Resolve model (caller > env var > default) ────────────────────────────
+    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
     # ── 1. Ingest new files ───────────────────────────────────────────────────
     # Merge legacy file_path with new file_paths list, deduplicate
@@ -168,7 +228,6 @@ def dispatch(
                 top_k=3,
                 api_key=api_key,
                 model=resolved_model,
-                provider=provider,
             )
             if _rag_text and "[no results]" not in _rag_text.lower():
                 _ctx_prefix = (
@@ -178,16 +237,33 @@ def dispatch(
         except Exception:
             pass   # RAG failure is non-fatal — continue without it
 
-    # ── 4. Classify user intent ───────────────────────────────────────────────
-    route_result = route(user_message, api_key=api_key, provider=provider, model=resolved_model)
+    # ── 4. Out-of-scope guardrail ─────────────────────────────────────────────
+    # Reject questions clearly outside the EDI/XSLT domain before routing.
+    # Skip the check if a file was just uploaded (the upload itself is in-scope).
+    _has_new_files = bool(_all_new_paths) or (ingested is not None and not session)
+    if not _has_new_files and not _is_in_scope(user_message):
+        return {
+            "route":              {"scores": {}, "active_intents": ["out_of_scope"],
+                                   "primary": "out_of_scope", "is_multi": False,
+                                   "threshold_used": 0.45},
+            "responses":          {"out_of_scope": _OUT_OF_SCOPE_RESPONSE},
+            "primary_response":   _OUT_OF_SCOPE_RESPONSE,
+            "agent":              None,
+            "ingested":           ingested,
+            "audit_dict":         None,
+            "patched_xslt":       None,
+            "session":            session,
+            "primary_file_name":  "",
+        }
 
-    # ── 5. Dispatch to each active engine in priority order ───────────────────
+    # ── 5. Classify user intent ───────────────────────────────────────────────
+    route_result = route(user_message, api_key=api_key)
+
+    # ── 6. Dispatch to each active engine in priority order ───────────────────
     responses: Dict[str, str] = {}
     agent: Any = None
     audit_dict: Optional[Dict] = None
     patched_xslt: Optional[str] = None
-    generated_xslt: Optional[str] = None
-    simulate_output: Optional[str] = None   # actual XML output from Saxon/lxml if real execution succeeded
 
     # Re-use the existing FileAgent from session if explain was run before,
     # so the full conversation history inside the agent is preserved.
@@ -212,7 +288,6 @@ def dispatch(
                     question=user_message,
                     api_key=api_key,
                     model=resolved_model,
-                    provider=provider,
                 )
                 responses[intent] = response
 
@@ -223,12 +298,28 @@ def dispatch(
                     "Pass file_path pointing to an XSLT/mapping file."
                 )
             else:
-                response, simulate_output = simulate(
+                msg = _ctx_prefix + user_message
+
+                # ── Auto-resolve source_file from session ──────────────────────
+                # app.py never passes source_file= explicitly.  When a non-XSLT
+                # file (D365_XML, X12_EDI, X12_XML, etc.) is in the session we
+                # pull its stored disk path so Saxon can execute the real XSLT.
+                resolved_source = source_file
+                if resolved_source is None and session is not None:
+                    _source_types = {"D365_XML", "X12_EDI", "X12_XML",
+                                     "EDIFACT", "XSD", "XML"}
+                    for _f in reversed(session.ingested_files):
+                        _ftype = _f.get("metadata", {}).get("file_type", "")
+                        _fpath = _f.get("metadata", {}).get("source_path", "")
+                        if _ftype in _source_types and _fpath and Path(_fpath).exists():
+                            resolved_source = _fpath
+                            break
+
+                response, _sim_agent = simulate(
                     ingested,
-                    source_file=source_file,
+                    source_file=resolved_source,
                     api_key=api_key,
                     model=resolved_model,
-                    provider=provider,
                 )
                 responses[intent] = response
 
@@ -240,12 +331,13 @@ def dispatch(
                 )
             else:
                 msg = _ctx_prefix + user_message
+                # FIX: capture patched_xslt (second return value) — was wrongly
+                # discarded as `_mod_agent` in earlier versions.
                 response, patched_xslt = modify(
                     ingested,
                     modification_request=msg,
                     api_key=api_key,
                     model=resolved_model,
-                    provider=provider,
                 )
                 responses[intent] = response
                 # Auto-audit: append audit findings to the proposed modification
@@ -254,18 +346,16 @@ def dispatch(
                     context=response,
                     api_key=api_key,
                     model=resolved_model,
-                    provider=provider,
                 )
                 responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
 
         elif intent == "generate":
             msg = _ctx_prefix + user_message
-            response, generated_xslt = generate(
+            response, _ = generate(
                 generation_request=msg,
                 source_sample=source_file,
                 api_key=api_key,
                 model=resolved_model,
-                provider=provider,
             )
             responses[intent] = response
             # Auto-audit: append audit findings to the generated XSLT
@@ -275,7 +365,6 @@ def dispatch(
                     context=response,
                     api_key=api_key,
                     model=resolved_model,
-                    provider=provider,
                 )
                 responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
 
@@ -290,14 +379,13 @@ def dispatch(
                     ingested,
                     api_key=api_key,
                     model=resolved_model,
-                    provider=provider,
                 )
                 responses[intent] = response
 
     primary = route_result["primary"]
     primary_response = responses.get(primary, "")
 
-    # ── 6. Update session with this turn's results ────────────────────────────
+    # ── 7. Update session with this turn's results ────────────────────────────
     if session is not None:
         # ingested is already registered via session.add_file() above for new
         # files; only update the primary alias here for files loaded via the
@@ -320,8 +408,6 @@ def dispatch(
         "ingested":           ingested,
         "audit_dict":         audit_dict,
         "patched_xslt":       patched_xslt,
-        "generated_xslt":     generated_xslt,
-        "simulate_output":    simulate_output,
         "session":            session,
         "primary_file_name":  _primary_file_name,
     }
@@ -335,7 +421,6 @@ def dispatch_folder(
     top_k: int = 5,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    provider: str = "groq",
 ) -> dict:
     """
     Index a folder of mapping files (if not already indexed) and answer a
@@ -371,8 +456,7 @@ def dispatch_folder(
     except ImportError:
         from rag_engine import index_folder, query_folder  # type: ignore
 
-    from .llm_client import DEFAULT_MODELS
-    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
+    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
     index_result = index_folder(
         folder_path=folder_path,
@@ -386,7 +470,6 @@ def dispatch_folder(
         top_k=top_k,
         api_key=api_key,
         model=resolved_model,
-        provider=provider,
     )
 
     return {

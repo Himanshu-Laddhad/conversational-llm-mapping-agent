@@ -1416,6 +1416,7 @@ def ingest_file(
             "file_type": file_type,
             "detected_version": version,
             "filename": filename,
+            "source_path": file_path,   # original disk path — used by simulate() for Saxon
             "parse_status": parse_status,
             "parse_error": parse_error
         },
