@@ -275,6 +275,15 @@ def dispatch(
     # Skip the check if a file was just uploaded (the upload itself is in-scope).
     _has_new_files = bool(_all_new_paths) or (ingested is not None and not session)
     if not _has_new_files and not _is_in_scope(user_message):
+        _audit_log_event(
+            actor=_actor,
+            action="dispatch",
+            target="out_of_scope",
+            status="success",
+            duration_ms=int((time.time() - _t0) * 1000),
+            why="out_of_scope_guardrail",
+            metadata={"user_message_chars": len(user_message)},
+        )
         return {
             "route":              {"scores": {}, "active_intents": ["out_of_scope"],
                                    "primary": "out_of_scope", "is_multi": False,
