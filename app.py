@@ -11,11 +11,14 @@ Run with:
     streamlit run app.py
 """
 
+import os
 import re as _re
+import difflib
 from pathlib import Path
 from typing import Optional
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 # Load .env so GROQ_API_KEY is available
@@ -94,8 +97,15 @@ def _init_state() -> None:
     if "llm_provider" not in st.session_state:
         st.session_state.llm_provider = "groq"
     if "llm_api_key" not in st.session_state:
-        import os
         st.session_state.llm_api_key = os.getenv("GROQ_API_KEY", "")
+    if "review_before_xslt" not in st.session_state:
+        st.session_state.review_before_xslt = None
+    if "review_after_xslt" not in st.session_state:
+        st.session_state.review_after_xslt = None
+    if "review_rule_key" not in st.session_state:
+        st.session_state.review_rule_key = None
+    if "review_status" not in st.session_state:
+        st.session_state.review_status = None
 
 
 _init_state()
@@ -182,6 +192,55 @@ def _badge(intent: str) -> str:
 
 def _active_file_names() -> set:
     return {f["name"] for f in st.session_state.active_files}
+
+def _extract_xml_fence(text: str) -> Optional[str]:
+    """
+    Extract the first ```xml ...``` fenced block.
+    Returns None if not found.
+    """
+    m = _re.search(r"```xml\\s*(.*?)\\s*```", text, flags=_re.DOTALL | _re.IGNORECASE)
+    return m.group(1).strip() if m else None
+
+
+def _extract_modify_after_block(text: str) -> Optional[str]:
+    """
+    Extract the AFTER block from the modify engine format:
+    ## AFTER
+    ```xml
+    ...
+    ```
+    """
+    m = _re.search(r"##\\s+AFTER\\s*```xml\\s*(.*?)\\s*```", text, flags=_re.DOTALL | _re.IGNORECASE)
+    return m.group(1).strip() if m else None
+
+
+def _copy_button(label: str, text: str, key: str) -> None:
+    escaped = (
+        text.replace("\\\\", "\\\\\\\\")
+        .replace("`", "\\`")
+        .replace("${", "\\${")
+    )
+    components.html(
+        f"""
+        <button id="{key}" style="padding:0.25rem 0.6rem;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;cursor:pointer;">
+          {label}
+        </button>
+        <script>
+          const btn = document.getElementById("{key}");
+          btn.addEventListener("click", async () => {{
+            try {{
+              await navigator.clipboard.writeText(`{escaped}`);
+              btn.innerText = "Copied!";
+              setTimeout(() => btn.innerText = "{label}", 1200);
+            }} catch (e) {{
+              btn.innerText = "Copy failed";
+              setTimeout(() => btn.innerText = "{label}", 1200);
+            }}
+          }});
+        </script>
+        """,
+        height=40,
+    )
 
 
 def _ingest_and_update_session(
@@ -347,11 +406,30 @@ with st.sidebar:
         with st.spinner("Indexing…"):
             try:
                 from modules.rag_engine import index_folder
+                from modules.rules_store import RulesStore, utc_now
+                db_path = Path(__file__).resolve().parent / "rules_store.db"
                 idx_result = index_folder(
                     folder_path=str(_data_dir),
                     persist_dir=str(_index_dir),
                     force_reindex=True,
                 )
+                try:
+                    with RulesStore(db_path) as store:
+                        now = utc_now()
+                        store.log_event(
+                            actor=str(st.session_state.get("reviewer_name") or "system"),
+                            action="reindex_data",
+                            target=str(_data_dir),
+                            status="success",
+                            started_at=now,
+                            finished_at=now,
+                            duration_ms=0,
+                            why="user_clicked_reindex",
+                            error=None,
+                            metadata=idx_result,
+                        )
+                except Exception:
+                    pass
                 st.success(
                     f"Indexed {idx_result.get('indexed', 0)}, "
                     f"skipped {idx_result.get('skipped', 0)}"
@@ -372,6 +450,14 @@ with st.sidebar:
         st.session_state.last_route     = None
         st.rerun()
     st.divider()
+
+    # ── Reviewer identity (for audit log) ─────────────────────────────────────
+    st.subheader("✅ Review")
+    st.text_input(
+        "Your name (for approvals/audit)",
+        key="reviewer_name",
+        placeholder="e.g. Annabelle",
+    )
 
     # ── Debug expander ─────────────────────────────────────────────────────────
     with st.expander("Debug — last route", expanded=False):
@@ -437,6 +523,122 @@ for _msg_idx, msg in enumerate(st.session_state.messages):
                 key=f"dl_{_msg_idx}",
             )
 
+
+st.divider()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REVIEW PANEL — generated XSLT (approve/reject/rollback)
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown("### 🧾 Review Generated XSLT")
+
+if not st.session_state.review_after_xslt:
+    st.info("No generated XSLT to review yet. Ask the agent to **generate** or **modify** an XSLT.")
+else:
+    rule_key = st.session_state.review_rule_key or "unspecified_rule"
+    before_xslt = st.session_state.review_before_xslt or ""
+    after_xslt = st.session_state.review_after_xslt or ""
+
+    top_l, top_r = st.columns([3, 2])
+    with top_l:
+        st.caption(f"**Rule key:** `{rule_key}`")
+    with top_r:
+        st.text_input("Reason (required)", key="review_reason", placeholder="Why approve/reject/rollback?")
+
+    action_cols = st.columns([1, 1, 1, 2])
+    with action_cols[0]:
+        _copy_button("Copy XSLT", after_xslt, key="copy_xslt_btn")
+    with action_cols[1]:
+        st.download_button(
+            "Download .xslt",
+            data=after_xslt,
+            file_name=f"{rule_key}.xslt",
+            mime="application/xml",
+            use_container_width=True,
+        )
+    with action_cols[2]:
+        show_diff = st.checkbox("Show diff", value=True)
+
+    if show_diff:
+        if not before_xslt:
+            st.warning("No 'before' XSLT available for diff (upload an XSLT or modify an existing mapping).")
+        else:
+            diff = difflib.HtmlDiff(wrapcolumn=80).make_table(
+                before_xslt.splitlines(),
+                after_xslt.splitlines(),
+                fromdesc="Before",
+                todesc="After",
+                context=True,
+                numlines=3,
+            )
+            st.markdown(diff, unsafe_allow_html=True)
+
+    st.markdown("#### XSLT")
+    st.code(after_xslt, language="xml")
+
+    btn_l, btn_r, btn_rb = st.columns([1, 1, 2])
+    reviewer = (st.session_state.get("reviewer_name") or "unknown").strip()
+    reason = (st.session_state.get("review_reason") or "").strip()
+
+    with btn_l:
+        if st.button("✅ Approve", type="primary", use_container_width=True):
+            if not reason:
+                st.error("Reason is required to approve.")
+            else:
+                try:
+                    import approval_gate
+                    res = approval_gate.approve(rule_key=rule_key, xslt=after_xslt, actor=reviewer, why=reason)
+                    st.session_state.review_status = f"Approved {rule_key} as v{res.get('version')}"
+                except Exception as ex:
+                    st.session_state.review_status = f"Approve failed: {ex}"
+                st.rerun()
+
+    with btn_r:
+        if st.button("❌ Reject", use_container_width=True):
+            if not reason:
+                st.error("Reason is required to reject.")
+            else:
+                try:
+                    import approval_gate
+                    approval_gate.reject(rule_key=rule_key, xslt=after_xslt, actor=reviewer, why=reason)
+                    st.session_state.review_status = f"Rejected {rule_key}"
+                except Exception as ex:
+                    st.session_state.review_status = f"Reject failed: {ex}"
+                st.rerun()
+
+    with btn_rb:
+        try:
+            from modules.rules_store import RulesStore
+            db_path = Path(__file__).resolve().parent / "rules_store.db"
+            with RulesStore(db_path) as store:
+                versions = store.list_rule_versions(rule_key)
+        except Exception:
+            versions = []
+
+        if versions:
+            choices = [f"v{v.version} — {v.approved_at.date()} by {v.approved_by}" for v in versions]
+            selected = st.selectbox("Rollback to approved version", choices, index=0)
+            sel_ver = versions[choices.index(selected)].version
+            if st.button("⏪ Rollback", use_container_width=True):
+                if not reason:
+                    st.error("Reason is required to rollback.")
+                else:
+                    try:
+                        import approval_gate
+                        res = approval_gate.rollback(rule_key=rule_key, version=sel_ver, actor=reviewer, why=reason)
+                        st.session_state.review_after_xslt = res.get("xslt")
+                        st.session_state.review_status = f"Rolled back {rule_key} to v{sel_ver}"
+                    except Exception as ex:
+                        st.session_state.review_status = f"Rollback failed: {ex}"
+                    st.rerun()
+        else:
+            st.caption("No approved versions stored yet (approve one to enable rollback).")
+
+    if st.session_state.review_status:
+        if "failed" in str(st.session_state.review_status).lower():
+            st.error(st.session_state.review_status)
+        else:
+            st.success(st.session_state.review_status)
 
 
 # ── Inline audit form ──────────────────────────────────────────────────────────
@@ -609,6 +811,23 @@ if user_input:
         intent        = result["route"].get("primary", "unknown")
         file_used     = result.get("primary_file_name", "")
         st.session_state.last_route = result["route"]
+
+        # Capture XSLT for review panel (generate / modify)
+        ing = result.get("ingested") or {}
+        before = None
+        try:
+            before = (ing.get("parsed_content") or {}).get("raw_xml")
+        except Exception:
+            before = None
+        extracted = None
+        if intent == "generate":
+            extracted = _extract_xml_fence(response_text)
+        elif intent == "modify":
+            extracted = _extract_modify_after_block(response_text) or _extract_xml_fence(response_text)
+        if extracted:
+            st.session_state.review_before_xslt = before
+            st.session_state.review_after_xslt = extracted
+            st.session_state.review_rule_key = file_used or "generated_xslt"
 
         if result.get("audit_dict") is not None:
             st.session_state.audit_dict     = result["audit_dict"]

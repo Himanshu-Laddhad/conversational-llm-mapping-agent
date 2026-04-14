@@ -242,3 +242,8 @@ data/*
 # Built locally by scripts/index_data.py — never committed.
 # Each machine builds its own index; re-run the script after adding new files.
 .rag_index/
+
+# ── Local SQLite stores ───────────────────────────────────────────────────────
+# Created at runtime; never committed.
+rules_store.db
+rules_store.db-*

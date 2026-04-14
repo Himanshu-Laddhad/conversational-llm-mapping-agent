@@ -44,9 +44,39 @@ Usage (standalone test):
 
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
+
+# Non-invasive audit logging (best-effort; never breaks dispatch()).
+def _audit_log_event(**kwargs: Any) -> None:
+    try:
+        from .rules_store import RulesStore, utc_now  # type: ignore
+    except Exception:
+        try:
+            from rules_store import RulesStore, utc_now  # type: ignore
+        except Exception:
+            return
+
+    try:
+        db_path = Path(__file__).resolve().parent.parent / "rules_store.db"
+        with RulesStore(db_path) as store:
+            now = utc_now()
+            store.log_event(
+                actor=str(kwargs.get("actor", "system")),
+                action=str(kwargs.get("action", "dispatch")),
+                target=str(kwargs.get("target", "dispatch")),
+                status=str(kwargs.get("status", "success")),
+                started_at=kwargs.get("started_at", now),
+                finished_at=kwargs.get("finished_at", now),
+                duration_ms=int(kwargs.get("duration_ms", 0)),
+                why=str(kwargs.get("why", "")),
+                error=kwargs.get("error"),
+                metadata=kwargs.get("metadata"),
+            )
+    except Exception:
+        return
 
 # Load .env from module directory or one level up
 _here = Path(__file__).resolve().parent
@@ -172,6 +202,9 @@ def dispatch(
         ValueError: If no Groq API key is available.
         FileNotFoundError: If a provided file path does not exist.
     """
+    _t0 = time.time()
+    _actor = getattr(session, "session_id", None) if session is not None else None
+    _actor = str(_actor) if _actor else "system"
     try:
         from .intent_router import route
         from .file_ingestion import ingest_file
@@ -400,7 +433,7 @@ def dispatch(
         ingested.get("metadata", {}).get("filename", "") if ingested else ""
     )
 
-    return {
+    result = {
         "route":              route_result,
         "responses":          responses,
         "primary_response":   primary_response,
@@ -411,6 +444,23 @@ def dispatch(
         "session":            session,
         "primary_file_name":  _primary_file_name,
     }
+
+    _audit_log_event(
+        actor=_actor,
+        action="dispatch",
+        target=route_result.get("primary", "unknown"),
+        status="success",
+        duration_ms=int((time.time() - _t0) * 1000),
+        why="user_request",
+        metadata={
+            "active_intents": route_result.get("active_intents", []),
+            "primary": route_result.get("primary"),
+            "file_path": file_path,
+            "file_paths": file_paths,
+            "primary_file_name": _primary_file_name,
+        },
+    )
+    return result
 
 
 def dispatch_folder(
