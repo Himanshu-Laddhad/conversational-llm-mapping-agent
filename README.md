@@ -21,6 +21,7 @@ A Streamlit-based AI agent that lets EDI analysts interact with XSLT/EDI mapping
 ```
 PartnerLinQ/
 ├── app.py                        # Streamlit UI — multi-file upload, chat, sidebar
+├── approval_gate.py              # Approve / Reject / Rollback integration layer
 ├── modules/
 │   ├── dispatcher.py             # Central router — intent → engine
 │   ├── intent_router.py          # Classifies user intent via LLM scoring
@@ -33,9 +34,12 @@ PartnerLinQ/
 │   ├── xslt_generator.py         # generate() — XSLT from requirements
 │   ├── rag_engine.py             # RAG folder indexing and querying
 │   ├── llm_client.py             # Multi-provider LLM client (Groq / OpenAI / Anthropic)
+│   ├── rules_store.py            # SQLite store — approved rule versions + audit log
 │   └── session.py                # Session state: file history, conversation memory
+├── scripts/
+│   └── index_data.py             # CLI tool — indexes data/ folder into ChromaDB RAG index
 ├── requirements.txt
-├── test_changes.py               # Verification test suite (26 checks)
+├── test_changes.py               # Verification test suite (31 checks)
 └── .env                          # API keys (never commit this file)
 ```
 
@@ -118,35 +122,84 @@ The response always includes a processor banner at the top:
 
 ## Recent Fixes & Improvements
 
-### 1. Saxon-HE Integration (`simulation_engine.py`)
-**Problem:** The simulation engine always fell back to LLM dry-run simulation, never actually executing the XSLT.  
-**Fix:** Rewrote the engine with a Saxon-HE → lxml → LLM cascade. Saxon-HE (`saxonche` package) now executes XSLT 2.0/3.0 files against the real source data, producing actual transformed output.
+> See [`BUGFIX.md`](BUGFIX.md) for full root-cause analysis and code diffs.
 
-### 2. Source File Path Plumbing (`dispatcher.py`, `file_ingestion.py`)
-**Problem:** The source file's disk path was never passed through to the simulation engine, so Saxon had no file to process.  
-**Fix:**
-- `file_ingestion.py` now stores `source_path` (original disk path) in the ingested metadata dict.
-- `dispatcher.py` simulate block now auto-scans `session.ingested_files` for a non-XSLT file (D365_XML, X12_EDI, X12_XML, etc.) and passes its `source_path` to `simulate()` automatically — no manual wiring required from the UI.
+### B1 — `patched_xslt` Download Bug (`dispatcher.py`) — HIGH
+The modified XSLT returned by `modify()` was silently discarded (`_mod_agent`), so the Download button never received the patched file. Fixed by unpacking into `patched_xslt`.
 
-### 3. Altova Extension Detection (`simulation_engine.py`)
-**Problem:** Detection was too broad — XSLTs that merely *declare* the Altova namespace (`xmlns:altova="..."`) were flagged even when they never call any Altova functions. Saxon can execute these fine.  
-**Fix:** Detection now uses a regex that matches actual function *call* patterns (`altova:funcName(` / `altovaext:funcName(`) instead of namespace declarations.
+### B2/B12 — Dead variable in simulate branch (`dispatcher.py`) — MEDIUM/LOW
+`_ctx_prefix` was computed inside the simulate branch but never forwarded (simulate takes no user-message parameter). Removed the dead assignment.
 
-### 4. Out-of-Scope Guardrail (`dispatcher.py`)
-**Problem:** The agent answered completely off-topic questions (e.g. "What is the capital of France?"), wasting LLM tokens.  
-**Fix:** Added `_is_in_scope()` — a fast keyword check (no LLM calls) that runs before intent routing. Messages with no EDI/XSLT domain signal receive a friendly redirect. Uses substring matching for long keywords and whole-word `\b` regex for short EDI codes (ISA, GS, ST…) to avoid false positives.
+### B3 — `IF_NO_ELSE` false-positives on all XSLT files (`audit_engine.py`) — HIGH
+Every valid stylesheet triggered a "no xsl:otherwise fallback" warning because the rule checked `xsl:if` instead of `xsl:choose`. Fixed to check `choose_count > 0 and otherwise_count == 0`.
 
-### 5. `patched_xslt` Download Bug (`dispatcher.py`)
-**Problem:** The modified XSLT returned by `modify()` was silently discarded (assigned to `_mod_agent`), so the Download button in the UI never received the patched file.  
-**Fix:** Changed `response, _mod_agent = modify(...)` to `response, patched_xslt = modify(...)` so the patched content is correctly captured and returned to `app.py`.
+### B4 — Groq API `content=None` crash (all engines) — HIGH
+`AttributeError: 'NoneType' object has no attribute 'strip'` on any empty or tool-call response. Added `or ""` guard in all five engine files.
 
-### 6. TPM Rate Limit Fix (`file_agent.py`)
-**Problem:** Uploading large XSLT files (e.g. 38KB Nordstrom 810) caused a `413 Request too large` error from Groq's API (12,000 token/minute limit on free tier).  
-**Fix:** Added per-field cap of 6,000 characters and a 24,000 character total JSON cap on the serialized ingested file sent to the LLM.
+### B5 — lxml warnings discard real transform output (`simulation_engine.py`) — HIGH
+Informational `error_log` entries caused the successful lxml result to be thrown away. Fixed to only discard on `ERROR` or `FATAL_ERROR` level.
 
-### 7. Multi-Provider Compatibility (`file_agent.py`, `dispatcher.py`)
-**Problem:** Collaborator branches added multi-provider LLM support (`provider=` parameter). This caused `__init__() got an unexpected keyword argument 'api_key'` and `dispatch() got an unexpected keyword argument 'provider'` errors on startup.  
-**Fix:** Added `api_key` and `provider` as accepted backward-compatible parameters to `FileAgent.__init__()` and `dispatch()`.
+### B6 — Stale `patched_xslt` survives session reset (`app.py`) — MEDIUM
+After "New Session" or "Sign out", the previous session's Download button could reappear. Added `patched_xslt` and `patched_xslt_filename` to both reset paths.
+
+### B7 — Audit form hides falsy current values (`app.py`) — MEDIUM
+Current values of `0`, `0.0`, or `False` were hidden by a truthiness check. Fixed with `if cv is not None`.
+
+### B8 — RAG file count metric wrong (`app.py`) — MEDIUM
+Sidebar count used `len(glob("*")) - 1`, counting directories and assuming exactly one `.gitkeep`. Replaced with a recursive count filtered to supported extensions.
+
+### B9 — Wrong file selected on keyword score tie (`session.py`) — MEDIUM
+`if score > best_score` kept the oldest file on ties. Changed to `>=` so the most recently uploaded file wins.
+
+### B10 — Demo password exposed in error message (`app.py`) — MEDIUM
+Incorrect password showed "Use: partnerlinq2026", leaking the credential. Changed to a generic "Incorrect password." message.
+
+### B13 — Error intent badge unstyled (`app.py`) — LOW
+Exception responses showed an unstyled chip because `.badge-error` CSS was missing. Added the rule.
+
+### B14 — File uploads overwrite on same filename (`app.py`) — LOW
+Two uploads with identical names silently overwrote each other on disk. Prefixed saved filenames with the session ID (`{session_id}_{filename}`).
+
+---
+
+## Approval Workflow
+
+The agent includes a lightweight approval/rollback layer for XSLT rule changes, backed by a local SQLite database (`rules_store.db`).
+
+| Component | File | Purpose |
+|---|---|---|
+| `RulesStore` | `modules/rules_store.py` | SQLite store — versioned rule approvals + full audit event log |
+| `approval_gate` | `approval_gate.py` | Thin API — `approve()`, `reject()`, `rollback()` |
+
+### Usage
+
+```python
+from approval_gate import approve, reject, rollback
+
+# Approve a mapping version
+approve(rule_key="nordstrom_810", xslt=xslt_content, actor="alice", why="Verified output matches spec")
+
+# Reject without storing a version (still logged for audit)
+reject(rule_key="nordstrom_810", xslt=xslt_content, actor="bob", why="Missing DTM segment")
+
+# Roll back to a prior approved version
+rollback(rule_key="nordstrom_810", version=2, actor="alice", why="v3 caused mapping failures")
+```
+
+The `rules_store.db` file is created automatically at the project root on first use. Every approve/reject/rollback action is written to the `audit_events` table with actor, timestamp, duration, and reason.
+
+---
+
+## RAG Index
+
+To pre-index your mapping files for cross-file RAG queries, place them in the `data/` folder and run:
+
+```bash
+python scripts/index_data.py          # incremental — skips already-indexed files
+python scripts/index_data.py --force  # wipe and rebuild from scratch
+```
+
+Supported file types: `.xml`, `.xsl`, `.xslt`, `.xsd`, `.edi`, `.txt`
 
 ---
 
@@ -156,10 +209,10 @@ The response always includes a processor banner at the top:
 python test_changes.py
 ```
 
-Runs 26 checks covering:
+Runs 31 checks covering:
 - Saxon-HE XSLT execution
 - Altova function call detection
-- Out-of-scope guardrail (in-scope and out-of-scope messages)
+- Out-of-scope guardrail (13 in-scope and out-of-scope messages)
 - `patched_xslt` capture from `modify()`
 - Source file auto-resolution from session
 

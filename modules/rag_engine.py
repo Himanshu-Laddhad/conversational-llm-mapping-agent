@@ -218,7 +218,7 @@ def index_folder(
         metadata={"hnsw:space": "cosine"},
     )
 
-    embed_model = SentenceTransformer(_EMBED_MODEL)
+    embed_model = SentenceTransformer(_EMBED_MODEL, local_files_only=True)
 
     # Collect existing IDs to support skip-if-already-indexed
     existing_ids: set = set()
@@ -350,7 +350,7 @@ def query_folder(
             "Run index_folder() first."
         )
 
-    embed_model = SentenceTransformer(_EMBED_MODEL)
+    embed_model = SentenceTransformer(_EMBED_MODEL, local_files_only=True)
     query_embedding = embed_model.encode(question).tolist()
 
     n_results = min(top_k, count)

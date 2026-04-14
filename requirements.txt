@@ -1,9 +1,12 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # INDUSTRY PRACTICUM - PARTNERLINQ
-# Python Dependencies
+# Python Dependencies  (updated April 2026)
 # ══════════════════════════════════════════════════════════════════════════════
 # Install with: pip install -r requirements.txt
 # Or in development mode: pip install -r requirements.txt --upgrade
+#
+# Note: modules/rules_store.py and approval_gate.py use only stdlib (sqlite3,
+# json, pathlib, dataclasses) — no additional packages required for them.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Core AI & LLM ─────────────────────────────────────────────────────────────
