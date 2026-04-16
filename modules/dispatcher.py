@@ -306,6 +306,12 @@ def dispatch(
     agent: Any = None
     audit_dict: Optional[Dict] = None
     patched_xslt: Optional[str] = None
+    simulate_output: Optional[str] = None
+    updated_xslt: Optional[str] = None
+    change_summary: str = ""
+    comparison_data: Optional[Dict[str, Any]] = None
+    latest_version_path: str = ""
+    test_readiness_status: str = "no revised XSLT available"
 
     # Re-use the existing FileAgent from session if explain was run before,
     # so the full conversation history inside the agent is preserved.
@@ -357,7 +363,7 @@ def dispatch(
                             resolved_source = _fpath
                             break
 
-                response, _sim_agent = simulate(
+                response, simulate_output = simulate(
                     ingested,
                     source_file=resolved_source,
                     api_key=api_key,
@@ -381,6 +387,55 @@ def dispatch(
                     api_key=api_key,
                     model=resolved_model,
                 )
+                updated_xslt = patched_xslt
+                try:
+                    from .modification_engine import _parse_patch
+                    from .xslt_revision_store import XsltRevisionStore, build_comparison
+
+                    patch = _parse_patch(response)
+                    change_summary = patch.get("summary", "")
+
+                    full_raw_xslt = (ingested.get("parsed_content") or {}).get("raw_xml") or ""
+                    if patched_xslt and full_raw_xslt:
+                        comparison_data = build_comparison(full_raw_xslt, patched_xslt)
+
+                        meta = ingested.get("metadata", {})
+                        source_path_for_revision = meta.get("source_path") or ""
+                        file_name_for_revision = meta.get("filename", "mapping.xml")
+
+                        if source_path_for_revision and Path(source_path_for_revision).exists():
+                            store = XsltRevisionStore(
+                                Path(__file__).resolve().parent.parent / "data" / "revisions"
+                            )
+                            rev = store.save_revision(
+                                source_path=source_path_for_revision,
+                                filename=file_name_for_revision,
+                                xslt_text=patched_xslt,
+                                change_summary=change_summary or "Updated XSLT revision",
+                            )
+                            latest_version_path = rev.latest_version_path
+
+                            sample_source_available = False
+                            if session is not None:
+                                for _f in reversed(session.ingested_files):
+                                    _ftype = _f.get("metadata", {}).get("file_type", "")
+                                    _fpath = _f.get("metadata", {}).get("source_path", "")
+                                    if _ftype != "XSLT" and _fpath and Path(_fpath).exists():
+                                        sample_source_available = True
+                                        break
+                            test_readiness_status = (
+                                "ready" if sample_source_available else "ready when sample XML is available"
+                            )
+                        else:
+                            test_readiness_status = (
+                                "revised XSLT generated, but original source path was unavailable"
+                            )
+                    elif patched_xslt:
+                        test_readiness_status = (
+                            "revised XSLT generated, but no original XSLT was available for comparison"
+                        )
+                except Exception as exc:
+                    test_readiness_status = f"revision persistence warning: {exc}"
                 responses[intent] = response
                 # Auto-audit: append audit findings to the proposed modification
                 _audit_resp, _ = audit(
@@ -450,6 +505,12 @@ def dispatch(
         "ingested":           ingested,
         "audit_dict":         audit_dict,
         "patched_xslt":       patched_xslt,
+        "updated_xslt":       updated_xslt,
+        "change_summary":     change_summary,
+        "comparison_data":    comparison_data,
+        "latest_version_path": latest_version_path,
+        "test_readiness_status": test_readiness_status,
+        "simulate_output":    simulate_output,
         "session":            session,
         "primary_file_name":  _primary_file_name,
     }

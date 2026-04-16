@@ -106,6 +106,16 @@ def _init_state() -> None:
         st.session_state.review_rule_key = None
     if "review_status" not in st.session_state:
         st.session_state.review_status = None
+    if "comparison_summary" not in st.session_state:
+        st.session_state.comparison_summary = ""
+    if "latest_version_path" not in st.session_state:
+        st.session_state.latest_version_path = ""
+    if "latest_test_result" not in st.session_state:
+        st.session_state.latest_test_result = None
+    if "latest_test_output" not in st.session_state:
+        st.session_state.latest_test_output = None
+    if "test_readiness_status" not in st.session_state:
+        st.session_state.test_readiness_status = ""
 
 
 _init_state()
@@ -293,6 +303,41 @@ def _ingest_and_update_session(
     else:
         session.add_file(new_ing)
         st.session_state.active_files.append({"name": _new_display, "path": str(dest)})
+
+
+def _pick_sample_input_path() -> Optional[str]:
+    for ing in reversed(st.session_state.session.ingested_files):
+        meta = ing.get("metadata", {})
+        file_type = meta.get("file_type", "")
+        source_path = meta.get("source_path", "")
+        if file_type != "XSLT" and source_path and Path(source_path).exists():
+            return source_path
+    return None
+
+
+def _test_latest_xslt() -> tuple[Optional[str], Optional[str]]:
+    latest_path = st.session_state.get("latest_version_path") or ""
+    if not latest_path or not Path(latest_path).exists():
+        return None, "No latest revised XSLT is available yet."
+
+    sample_path = _pick_sample_input_path()
+    if not sample_path:
+        return None, (
+            "No sample XML/input file is loaded. Upload a source XML or EDI sample, "
+            "then click **Test latest XSLT** again."
+        )
+
+    from modules.file_ingestion import ingest_file
+    from modules.simulation_engine import simulate
+
+    latest_ingested = ingest_file(file_path=latest_path)
+    response_text, output_xml = simulate(
+        latest_ingested,
+        source_file=sample_path,
+        api_key=st.session_state.get("llm_api_key") or None,
+        model=None,
+    )
+    return response_text, output_xml
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -542,6 +587,10 @@ else:
     top_l, top_r = st.columns([3, 2])
     with top_l:
         st.caption(f"**Rule key:** `{rule_key}`")
+        if st.session_state.latest_version_path:
+            st.caption(f"**Latest active revision:** `{st.session_state.latest_version_path}`")
+        if st.session_state.comparison_summary:
+            st.info(st.session_state.comparison_summary)
     with top_r:
         st.text_input("Reason (required)", key="review_reason", placeholder="Why approve/reject/rollback?")
 
@@ -559,6 +608,20 @@ else:
     with action_cols[2]:
         show_diff = st.checkbox("Show diff", value=True)
 
+    old_col, new_col = st.columns(2)
+    with old_col:
+        st.markdown("#### Original / Previous XSLT")
+        if before_xslt:
+            st.code(before_xslt, language="xml")
+        else:
+            st.info("No previous XSLT available for comparison yet.")
+    with new_col:
+        st.markdown("#### Latest Revised XSLT")
+        if after_xslt:
+            st.code(after_xslt, language="xml")
+        else:
+            st.info("No revised XSLT has been generated yet.")
+
     if show_diff:
         if not before_xslt:
             st.warning("No 'before' XSLT available for diff (upload an XSLT or modify an existing mapping).")
@@ -573,10 +636,7 @@ else:
             )
             st.markdown(diff, unsafe_allow_html=True)
 
-    st.markdown("#### XSLT")
-    st.code(after_xslt, language="xml")
-
-    btn_l, btn_r, btn_rb = st.columns([1, 1, 2])
+    btn_l, btn_r, btn_rb, btn_test = st.columns([1, 1, 2, 2])
     reviewer = (st.session_state.get("reviewer_name") or "unknown").strip()
     reason = (st.session_state.get("review_reason") or "").strip()
 
@@ -634,11 +694,44 @@ else:
         else:
             st.caption("No approved versions stored yet (approve one to enable rollback).")
 
+    with btn_test:
+        if st.button("🧪 Test latest XSLT", use_container_width=True):
+            with st.spinner("Testing latest revised XSLT…"):
+                try:
+                    test_result, test_output = _test_latest_xslt()
+                    st.session_state.latest_test_result = test_result
+                    st.session_state.latest_test_output = test_output
+                    if not test_result:
+                        st.session_state.review_status = (
+                            st.session_state.test_readiness_status
+                            or "No latest test result was produced."
+                        )
+                except Exception as ex:
+                    st.session_state.latest_test_result = None
+                    st.session_state.latest_test_output = None
+                    st.session_state.review_status = f"Latest test failed: {ex}"
+            st.rerun()
+
     if st.session_state.review_status:
         if "failed" in str(st.session_state.review_status).lower():
             st.error(st.session_state.review_status)
         else:
             st.success(st.session_state.review_status)
+
+    if st.session_state.test_readiness_status:
+        if "ready" in str(st.session_state.test_readiness_status).lower():
+            st.caption(f"Test readiness: {st.session_state.test_readiness_status}")
+        else:
+            st.warning(st.session_state.test_readiness_status)
+
+    if st.session_state.latest_test_result:
+        st.markdown("#### Latest Test Result")
+        st.markdown(st.session_state.latest_test_result)
+        if st.session_state.latest_test_output:
+            st.markdown("#### Latest Transform Output")
+            st.code(st.session_state.latest_test_output, language="xml")
+        else:
+            st.info("No real XML transform output was produced; the test used dry-run or LLM simulation.")
 
 
 # ── Inline audit form ──────────────────────────────────────────────────────────
@@ -828,6 +921,25 @@ if user_input:
             st.session_state.review_before_xslt = before
             st.session_state.review_after_xslt = extracted
             st.session_state.review_rule_key = file_used or "generated_xslt"
+            st.session_state.latest_test_result = None
+            st.session_state.latest_test_output = None
+
+        # Structured comparison + revision metadata (modify intent)
+        if result.get("comparison_data"):
+            comp = result["comparison_data"]
+            st.session_state.review_before_xslt = comp.get("old_xslt") or st.session_state.review_before_xslt
+            st.session_state.review_after_xslt = comp.get("new_xslt") or st.session_state.review_after_xslt
+            summary_parts = []
+            if result.get("change_summary"):
+                summary_parts.append(str(result["change_summary"]))
+            if comp.get("summary"):
+                summary_parts.append(str(comp["summary"]))
+            st.session_state.comparison_summary = " | ".join(summary_parts)
+        else:
+            st.session_state.comparison_summary = result.get("change_summary", "") or ""
+
+        st.session_state.latest_version_path = result.get("latest_version_path", "") or ""
+        st.session_state.test_readiness_status = result.get("test_readiness_status", "") or ""
 
         if result.get("audit_dict") is not None:
             st.session_state.audit_dict     = result["audit_dict"]

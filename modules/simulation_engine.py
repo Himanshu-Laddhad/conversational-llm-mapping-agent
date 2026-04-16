@@ -23,7 +23,8 @@ Execution hierarchy
    field. This is often more useful than raw XML for analyst users because the
    LLM can explain WHY each field has its value.
 
-5. Return (response_str, None) — mirrors the groq_agent.explain() return shape.
+5. Return (response_str, transform_output_xml_or_None) — mirrors the modify
+   engine pattern so callers can display the real latest output when available.
 
 Usage (as module)::
 
@@ -274,8 +275,9 @@ def simulate(
                       then llama-3.3-70b-versatile.
 
     Returns:
-        (response_str, None) where response_str is the simulation analysis.
-        The second element is always None (simulate is stateless).
+        (response_str, transform_output_xml_or_None) where response_str is the
+        simulation analysis and the second element is the real transform output
+        when Saxon/lxml succeeds (else None).
     """
     # ── Validate inputs ───────────────────────────────────────────────────────
     if not isinstance(ingested, dict):
@@ -393,7 +395,7 @@ def simulate(
         xslt_error=xslt_error if xslt_result_xml is None else None,
     )
 
-    return banner + llm_text, None
+    return banner + llm_text, xslt_result_xml
 
 
 # ── Message builder ───────────────────────────────────────────────────────────
