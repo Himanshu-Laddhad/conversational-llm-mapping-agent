@@ -24,7 +24,10 @@ Public API
   DEFAULT_MODELS  dict[str, str]   — default model name per provider
 """
 
+import time
 from typing import List, Dict, Any
+
+from modules.usage_tracker import log_usage
 
 # ── Provider registry ──────────────────────────────────────────────────────────
 
@@ -68,6 +71,7 @@ def chat_complete(
     provider: str = "groq",
     temperature: float = 0.1,
     max_tokens: int = 1_000,
+    caller: str = "",
 ) -> str:
     """
     Call the specified LLM provider and return the assistant reply as a string.
@@ -81,6 +85,8 @@ def chat_complete(
         provider:    One of "groq", "openai", "nvidia_nim", "anthropic".
         temperature: Sampling temperature (ignored for Anthropic).
         max_tokens:  Maximum tokens in the response.
+        caller:      Optional label identifying which module made this call
+                     (recorded in the usage log).
 
     Returns:
         The assistant reply as a stripped string.  Never returns None.
@@ -96,8 +102,8 @@ def chat_complete(
         )
 
     if provider == "anthropic":
-        return _anthropic_complete(messages, api_key, model, max_tokens)
-    return _openai_compat_complete(messages, api_key, model, provider, temperature, max_tokens)
+        return _anthropic_complete(messages, api_key, model, max_tokens, caller=caller)
+    return _openai_compat_complete(messages, api_key, model, provider, temperature, max_tokens, caller=caller)
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -109,6 +115,7 @@ def _openai_compat_complete(
     provider: str,
     temperature: float,
     max_tokens: int,
+    caller: str = "",
 ) -> str:
     """Use the openai SDK (OpenAI-compatible endpoint) for Groq, OpenAI, NIM."""
     from openai import OpenAI  # type: ignore
@@ -119,12 +126,29 @@ def _openai_compat_complete(
         kwargs["base_url"] = base_url
 
     client = OpenAI(**kwargs)
+    t0 = time.perf_counter()
     response = client.chat.completions.create(
         model=model,
         messages=messages,          # type: ignore[arg-type]
         temperature=temperature,
         max_tokens=max_tokens,
     )
+    latency_ms = (time.perf_counter() - t0) * 1000
+
+    usage = response.usage
+    if usage is not None:
+        log_usage(
+            provider=provider,
+            model=model,
+            caller=caller,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            latency_ms=latency_ms,
+        )
+
     return (response.choices[0].message.content or "").strip()
 
 
@@ -133,6 +157,7 @@ def _anthropic_complete(
     api_key: str,
     model: str,
     max_tokens: int,
+    caller: str = "",
 ) -> str:
     """Use the anthropic SDK.  System message is extracted from the list."""
     import anthropic  # type: ignore
@@ -155,5 +180,22 @@ def _anthropic_complete(
     if system:
         kwargs["system"] = system
 
+    t0 = time.perf_counter()
     response = client.messages.create(**kwargs)
+    latency_ms = (time.perf_counter() - t0) * 1000
+
+    usage = response.usage
+    if usage is not None:
+        log_usage(
+            provider="anthropic",
+            model=model,
+            caller=caller,
+            prompt_tokens=usage.input_tokens,
+            completion_tokens=usage.output_tokens,
+            total_tokens=usage.input_tokens + usage.output_tokens,
+            max_tokens=max_tokens,
+            temperature=0.0,
+            latency_ms=latency_ms,
+        )
+
     return (response.content[0].text or "").strip()

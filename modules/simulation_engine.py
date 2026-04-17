@@ -46,11 +46,14 @@ Usage (standalone test)::
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from dotenv import load_dotenv
 from groq import Groq
+
+from modules.usage_tracker import log_usage
 
 # Load .env from module directory or one level up
 _here = Path(__file__).resolve().parent
@@ -375,6 +378,7 @@ def simulate(
 
     # ── Step 6: Call Groq ─────────────────────────────────────────────────────
     client = Groq(api_key=key)
+    t0 = time.perf_counter()
     response = client.chat.completions.create(
         model=resolved_model,
         messages=[
@@ -384,6 +388,21 @@ def simulate(
         temperature=0.2,
         max_tokens=_MAX_OUTPUT_TOKENS,
     )
+    latency_ms = (time.perf_counter() - t0) * 1000
+
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        log_usage(
+            provider="groq",
+            model=resolved_model,
+            caller="simulation_engine",
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            max_tokens=_MAX_OUTPUT_TOKENS,
+            temperature=0.2,
+            latency_ms=latency_ms,
+        )
 
     llm_text = response.choices[0].message.content.strip()
 

@@ -528,482 +528,493 @@ with st.sidebar:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN CHAT AREA
+# MAIN AREA — TABBED LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.subheader("Mapping Intelligence Chat")
-st.caption(
-    "Attach mapping files using the paperclip button below, then ask anything — "
-    "explain, modify, generate, simulate, or audit. "
-    "The agent remembers the full conversation and all uploaded files."
-)
-
-# ── Render conversation history ────────────────────────────────────────────────
-for _msg_idx, msg in enumerate(st.session_state.messages):
-    role = msg["role"]
-    with st.chat_message(role):
-        if role == "assistant":
-            intent = msg.get("intent", "")
-            file_used = msg.get("file_used", "")
-            if intent:
-                header = _badge(intent)
-                if file_used:
-                    header += f'&nbsp;<span style="font-size:0.72rem;color:#64748b;">using <b>{file_used}</b></span>'
-                st.markdown(header, unsafe_allow_html=True)
-        st.markdown(msg["content"])
-        # Inline download button — only on assistant messages that produced an XSLT
-        if msg.get("download_xslt"):
-            dl_fname = msg.get("download_filename", "output.xml")
-            # Use stored label; fall back to stripping the session-id prefix
-            _parts = dl_fname.split("_", 2)
-            _fallback_label = _parts[-1] if len(_parts) >= 3 else dl_fname
-            dl_label = msg.get("download_label") or f"Download {_fallback_label}"
-            st.download_button(
-                label=dl_label,
-                data=msg["download_xslt"].encode("utf-8"),
-                file_name=dl_fname,
-                mime="application/xml",
-                type="primary",
-                use_container_width=False,
-                key=f"dl_{_msg_idx}",
-            )
-
-
-st.divider()
+tab_chat, tab_review = st.tabs(["💬 Chat", "🧾 Review & Diff"])
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REVIEW PANEL — generated XSLT (approve/reject/rollback)
+# TAB 1 — CHAT
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.markdown("### 🧾 Review Generated XSLT")
+with tab_chat:
+    st.subheader("Mapping Intelligence Chat")
+    st.caption(
+        "Attach mapping files using the paperclip button below, then ask anything — "
+        "explain, modify, generate, simulate, or audit. "
+        "The agent remembers the full conversation and all uploaded files."
+    )
 
-if not st.session_state.review_after_xslt:
-    st.info("No generated XSLT to review yet. Ask the agent to **generate** or **modify** an XSLT.")
-else:
-    rule_key = st.session_state.review_rule_key or "unspecified_rule"
-    before_xslt = st.session_state.review_before_xslt or ""
-    after_xslt = st.session_state.review_after_xslt or ""
+    # ── Render conversation history ────────────────────────────────────────────
+    for _msg_idx, msg in enumerate(st.session_state.messages):
+        role = msg["role"]
+        with st.chat_message(role):
+            if role == "assistant":
+                intent = msg.get("intent", "")
+                file_used = msg.get("file_used", "")
+                if intent:
+                    header = _badge(intent)
+                    if file_used:
+                        header += f'&nbsp;<span style="font-size:0.72rem;color:#64748b;">using <b>{file_used}</b></span>'
+                    st.markdown(header, unsafe_allow_html=True)
+            st.markdown(msg["content"])
+            # Inline download button — only on assistant messages that produced an XSLT
+            if msg.get("download_xslt"):
+                dl_fname = msg.get("download_filename", "output.xml")
+                _parts = dl_fname.split("_", 2)
+                _fallback_label = _parts[-1] if len(_parts) >= 3 else dl_fname
+                dl_label = msg.get("download_label") or f"Download {_fallback_label}"
+                st.download_button(
+                    label=dl_label,
+                    data=msg["download_xslt"].encode("utf-8"),
+                    file_name=dl_fname,
+                    mime="application/xml",
+                    type="primary",
+                    use_container_width=False,
+                    key=f"dl_{_msg_idx}",
+                )
 
-    top_l, top_r = st.columns([3, 2])
-    with top_l:
-        st.caption(f"**Rule key:** `{rule_key}`")
-        if st.session_state.latest_version_path:
-            st.caption(f"**Latest active revision:** `{st.session_state.latest_version_path}`")
-        if st.session_state.comparison_summary:
-            st.info(st.session_state.comparison_summary)
-    with top_r:
-        st.text_input("Reason (required)", key="review_reason", placeholder="Why approve/reject/rollback?")
+    st.divider()
 
-    action_cols = st.columns([1, 1, 1, 2])
-    with action_cols[0]:
-        _copy_button("Copy XSLT", after_xslt, key="copy_xslt_btn")
-    with action_cols[1]:
-        st.download_button(
-            "Download .xslt",
-            data=after_xslt,
-            file_name=f"{rule_key}.xslt",
-            mime="application/xml",
-            use_container_width=True,
+    # ── Attachment popover (compact file upload near the chat input) ───────────
+    # Capture the uploader return value OUTSIDE the popover context so that
+    # st.rerun() is never called from inside the popover block.
+    _inline_uploads = None
+    with st.popover("📎 Attach files", use_container_width=False):
+        st.caption("Upload mapping files to use in the chat.")
+        _inline_uploads = st.file_uploader(
+            "Attach files",
+            type=["xml", "xsl", "xslt", "xsd", "edi", "txt"],
+            accept_multiple_files=True,
+            key="inline_uploader",
+            label_visibility="collapsed",
         )
-    with action_cols[2]:
-        show_diff = st.checkbox("Show diff", value=True)
 
-    old_col, new_col = st.columns(2)
-    with old_col:
-        st.markdown("#### Original / Previous XSLT")
-        if before_xslt:
-            st.code(before_xslt, language="xml")
-        else:
-            st.info("No previous XSLT available for comparison yet.")
-    with new_col:
-        st.markdown("#### Latest Revised XSLT")
-        if after_xslt:
-            st.code(after_xslt, language="xml")
-        else:
-            st.info("No revised XSLT has been generated yet.")
+    # Process new inline uploads AFTER the popover context has closed.
+    if _inline_uploads:
+        _known = _active_file_names()
+        _new_inline = [f for f in _inline_uploads if f.name not in _known]
+        if _new_inline:
+            for _uf in _new_inline:
+                _saved = _save_upload(_uf)
+                st.session_state.active_files.append({"name": _uf.name, "path": _saved})
+                try:
+                    _ing = ingest_file(file_path=_saved)
+                    st.session_state.session.add_file(_ing)
+                except Exception:
+                    st.session_state.pending_paths.append(_saved)
+            st.rerun()
 
-    if show_diff:
-        if not before_xslt:
-            st.warning("No 'before' XSLT available for diff (upload an XSLT or modify an existing mapping).")
+    # ── Chat input ─────────────────────────────────────────────────────────────
+    user_input = st.chat_input("Ask anything about your mapping files…")
+
+    if user_input:
+        st.session_state.messages.append({"role": "user", "content": user_input})
+
+        _active_provider = st.session_state.get("llm_provider", "groq")
+        _active_api_key  = st.session_state.get("llm_api_key", "")
+
+        with st.spinner("Thinking…"):
+            try:
+                result = dispatch(
+                    user_message=user_input,
+                    file_paths=st.session_state.pending_paths,
+                    session=st.session_state.session,
+                    provider=_active_provider,
+                    api_key=_active_api_key or None,
+                )
+                dispatch_error = None
+            except Exception as ex:
+                result        = None
+                dispatch_error = str(ex)
+
+        # Clear pending paths — session now owns the ingested dicts
+        st.session_state.pending_paths = []
+
+        download_xslt     = None   # type: Optional[str]
+        download_filename = None   # type: Optional[str]
+        download_label    = None   # type: Optional[str]
+
+        if result is None:
+            response_text = f"⚠️ Error: {dispatch_error}"
+            intent        = "error"
+            file_used     = ""
         else:
-            diff = difflib.HtmlDiff(wrapcolumn=80).make_table(
-                before_xslt.splitlines(),
-                after_xslt.splitlines(),
-                fromdesc="Before",
-                todesc="After",
-                context=True,
-                numlines=3,
+            response_text = result["primary_response"] or "_No response generated._"
+            intent        = result["route"].get("primary", "unknown")
+            file_used     = result.get("primary_file_name", "")
+            st.session_state.last_route = result["route"]
+
+            # ── Capture XSLT for review tab (generate / modify) ────────────────
+            ing = result.get("ingested") or {}
+            before = None
+            try:
+                before = (ing.get("parsed_content") or {}).get("raw_xml")
+            except Exception:
+                before = None
+            extracted = None
+            if intent == "generate":
+                extracted = _extract_xml_fence(response_text)
+            elif intent == "modify":
+                extracted = _extract_modify_after_block(response_text) or _extract_xml_fence(response_text)
+            if extracted:
+                st.session_state.review_before_xslt = before
+                st.session_state.review_after_xslt  = extracted
+                st.session_state.review_rule_key    = file_used or "generated_xslt"
+                st.session_state.latest_test_result = None
+                st.session_state.latest_test_output = None
+
+            # Structured comparison + revision metadata (modify intent)
+            if result.get("comparison_data"):
+                comp = result["comparison_data"]
+                st.session_state.review_before_xslt = comp.get("old_xslt") or st.session_state.review_before_xslt
+                st.session_state.review_after_xslt  = comp.get("new_xslt") or st.session_state.review_after_xslt
+                summary_parts = []
+                if result.get("change_summary"):
+                    summary_parts.append(str(result["change_summary"]))
+                if comp.get("summary"):
+                    summary_parts.append(str(comp["summary"]))
+                st.session_state.comparison_summary = " | ".join(summary_parts)
+            else:
+                st.session_state.comparison_summary = result.get("change_summary", "") or ""
+
+            st.session_state.latest_version_path   = result.get("latest_version_path", "") or ""
+            st.session_state.test_readiness_status = result.get("test_readiness_status", "") or ""
+
+            if result.get("audit_dict") is not None:
+                st.session_state.audit_dict     = result["audit_dict"]
+                st.session_state.audit_ingested = result.get("ingested")
+
+            # ── Auto-ingest patched/generated XSLT back into session ──────────
+            # dispatcher already updated the session for generate; for modify
+            # we sync here so that the sidebar chip and next-turn ingested both
+            # point to the new file.
+            patched      = result.get("patched_xslt")
+            generated    = result.get("generated_xslt")
+            simulate_out = result.get("simulate_output")
+            _sid         = st.session_state.session.session_id
+
+            if patched and intent == "modify":
+                _raw_orig = result.get("primary_file_name", "mapping.xml")
+                if _raw_orig.startswith(_sid + "_"):
+                    _orig_display = _raw_orig[len(_sid) + 1:]
+                else:
+                    _orig_display = _raw_orig
+                _stem             = _orig_display.rsplit(".", 1)[0] if "." in _orig_display else _orig_display
+                _new_display      = f"{_stem}_patched.xml"
+                download_filename = f"{_sid}_{_new_display}"
+                download_label    = f"Download {_new_display}"
+                download_xslt     = patched
+                try:
+                    _ingest_and_update_session(
+                        patched,
+                        download_filename,
+                        original_name=_raw_orig,
+                        chip_name=_orig_display,
+                    )
+                except Exception:
+                    pass
+
+            elif simulate_out and intent == "simulate":
+                download_filename = f"{_sid}_transform_output.xml"
+                download_label    = "Download transform output (XML)"
+                download_xslt     = simulate_out
+
+            elif generated and intent == "generate":
+                download_filename = f"{_sid}_generated.xml"
+                download_label    = "Download generated XSLT"
+                download_xslt     = generated
+                # Strip the ```xml ... ``` fence from chat — it goes into the
+                # download. dispatcher already ingested the file into session.
+                response_text = _re.sub(
+                    r"```xml[\s\S]*?```",
+                    "_Full XSLT is available via the download button below._",
+                    response_text,
+                    count=1,
+                )
+                # Sync sidebar chip — dispatcher wrote the file; just add chip.
+                _gen_display = "generated.xml"
+                if not any(af["name"] == _gen_display for af in st.session_state.active_files):
+                    _gen_path = (
+                        Path(__file__).resolve().parent / "data" / "uploads"
+                        / f"{_sid}_generated.xml"
+                    )
+                    st.session_state.active_files.append(
+                        {"name": _gen_display, "path": str(_gen_path)}
+                    )
+
+        st.session_state.messages.append({
+            "role":              "assistant",
+            "content":           response_text,
+            "intent":            intent,
+            "file_used":         file_used,
+            "download_xslt":     download_xslt,
+            "download_filename": download_filename,
+            "download_label":    download_label,
+        })
+        st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — REVIEW & DIFF
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab_review:
+    st.markdown("### 🧾 Review Generated XSLT")
+
+    if not st.session_state.review_after_xslt:
+        st.info("No generated XSLT to review yet. Ask the agent to **generate** or **modify** an XSLT, then switch back here.")
+    else:
+        rule_key    = st.session_state.review_rule_key or "unspecified_rule"
+        before_xslt = st.session_state.review_before_xslt or ""
+        after_xslt  = st.session_state.review_after_xslt or ""
+
+        top_l, top_r = st.columns([3, 2])
+        with top_l:
+            st.caption(f"**Rule key:** `{rule_key}`")
+            if st.session_state.latest_version_path:
+                st.caption(f"**Latest active revision:** `{st.session_state.latest_version_path}`")
+            if st.session_state.comparison_summary:
+                st.info(st.session_state.comparison_summary)
+        with top_r:
+            st.text_input("Reason (required)", key="review_reason", placeholder="Why approve/reject/rollback?")
+
+        action_cols = st.columns([1, 1, 1, 2])
+        with action_cols[0]:
+            _copy_button("Copy XSLT", after_xslt, key="copy_xslt_btn")
+        with action_cols[1]:
+            st.download_button(
+                "Download .xslt",
+                data=after_xslt,
+                file_name=f"{rule_key}.xslt",
+                mime="application/xml",
+                use_container_width=True,
             )
-            st.markdown(diff, unsafe_allow_html=True)
+        with action_cols[2]:
+            show_diff = st.checkbox("Show diff", value=True)
 
-    btn_l, btn_r, btn_rb, btn_test = st.columns([1, 1, 2, 2])
-    reviewer = (st.session_state.get("reviewer_name") or "unknown").strip()
-    reason = (st.session_state.get("review_reason") or "").strip()
-
-    with btn_l:
-        if st.button("✅ Approve", type="primary", use_container_width=True):
-            if not reason:
-                st.error("Reason is required to approve.")
+        old_col, new_col = st.columns(2)
+        with old_col:
+            st.markdown("#### Original / Previous XSLT")
+            if before_xslt:
+                st.code(before_xslt, language="xml")
             else:
-                try:
-                    import approval_gate
-                    res = approval_gate.approve(rule_key=rule_key, xslt=after_xslt, actor=reviewer, why=reason)
-                    st.session_state.review_status = f"Approved {rule_key} as v{res.get('version')}"
-                except Exception as ex:
-                    st.session_state.review_status = f"Approve failed: {ex}"
-                st.rerun()
-
-    with btn_r:
-        if st.button("❌ Reject", use_container_width=True):
-            if not reason:
-                st.error("Reason is required to reject.")
+                st.info("No previous XSLT available for comparison yet.")
+        with new_col:
+            st.markdown("#### Latest Revised XSLT")
+            if after_xslt:
+                st.code(after_xslt, language="xml")
             else:
-                try:
-                    import approval_gate
-                    approval_gate.reject(rule_key=rule_key, xslt=after_xslt, actor=reviewer, why=reason)
-                    st.session_state.review_status = f"Rejected {rule_key}"
-                except Exception as ex:
-                    st.session_state.review_status = f"Reject failed: {ex}"
-                st.rerun()
+                st.info("No revised XSLT has been generated yet.")
 
-    with btn_rb:
-        try:
-            from modules.rules_store import RulesStore
-            db_path = Path(__file__).resolve().parent / "rules_store.db"
-            with RulesStore(db_path) as store:
-                versions = store.list_rule_versions(rule_key)
-        except Exception:
-            versions = []
+        if show_diff:
+            if not before_xslt:
+                st.warning("No 'before' XSLT available for diff (upload an XSLT or modify an existing mapping).")
+            else:
+                diff = difflib.HtmlDiff(wrapcolumn=80).make_table(
+                    before_xslt.splitlines(),
+                    after_xslt.splitlines(),
+                    fromdesc="Before",
+                    todesc="After",
+                    context=True,
+                    numlines=3,
+                )
+                st.markdown(diff, unsafe_allow_html=True)
 
-        if versions:
-            choices = [f"v{v.version} — {v.approved_at.date()} by {v.approved_by}" for v in versions]
-            selected = st.selectbox("Rollback to approved version", choices, index=0)
-            sel_ver = versions[choices.index(selected)].version
-            if st.button("⏪ Rollback", use_container_width=True):
+        btn_l, btn_r, btn_rb, btn_test = st.columns([1, 1, 2, 2])
+        reviewer = (st.session_state.get("reviewer_name") or "unknown").strip()
+        reason   = (st.session_state.get("review_reason") or "").strip()
+
+        with btn_l:
+            if st.button("✅ Approve", type="primary", use_container_width=True):
                 if not reason:
-                    st.error("Reason is required to rollback.")
+                    st.error("Reason is required to approve.")
                 else:
                     try:
                         import approval_gate
-                        res = approval_gate.rollback(rule_key=rule_key, version=sel_ver, actor=reviewer, why=reason)
-                        st.session_state.review_after_xslt = res.get("xslt")
-                        st.session_state.review_status = f"Rolled back {rule_key} to v{sel_ver}"
+                        res = approval_gate.approve(rule_key=rule_key, xslt=after_xslt, actor=reviewer, why=reason)
+                        st.session_state.review_status = f"Approved {rule_key} as v{res.get('version')}"
                     except Exception as ex:
-                        st.session_state.review_status = f"Rollback failed: {ex}"
+                        st.session_state.review_status = f"Approve failed: {ex}"
+                    st.rerun()
+
+        with btn_r:
+            if st.button("❌ Reject", use_container_width=True):
+                if not reason:
+                    st.error("Reason is required to reject.")
+                else:
+                    try:
+                        import approval_gate
+                        approval_gate.reject(rule_key=rule_key, xslt=after_xslt, actor=reviewer, why=reason)
+                        st.session_state.review_status = f"Rejected {rule_key}"
+                    except Exception as ex:
+                        st.session_state.review_status = f"Reject failed: {ex}"
+                    st.rerun()
+
+        with btn_rb:
+            try:
+                from modules.rules_store import RulesStore
+                db_path = Path(__file__).resolve().parent / "rules_store.db"
+                with RulesStore(db_path) as store:
+                    versions = store.list_rule_versions(rule_key)
+            except Exception:
+                versions = []
+
+            if versions:
+                choices  = [f"v{v.version} — {v.approved_at.date()} by {v.approved_by}" for v in versions]
+                selected = st.selectbox("Rollback to approved version", choices, index=0)
+                sel_ver  = versions[choices.index(selected)].version
+                if st.button("⏪ Rollback", use_container_width=True):
+                    if not reason:
+                        st.error("Reason is required to rollback.")
+                    else:
+                        try:
+                            import approval_gate
+                            res = approval_gate.rollback(rule_key=rule_key, version=sel_ver, actor=reviewer, why=reason)
+                            st.session_state.review_after_xslt = res.get("xslt")
+                            st.session_state.review_status = f"Rolled back {rule_key} to v{sel_ver}"
+                        except Exception as ex:
+                            st.session_state.review_status = f"Rollback failed: {ex}"
+                        st.rerun()
+            else:
+                st.caption("No approved versions stored yet (approve one to enable rollback).")
+
+        with btn_test:
+            if st.button("🧪 Test latest XSLT", use_container_width=True):
+                with st.spinner("Testing latest revised XSLT…"):
+                    try:
+                        test_result, test_output = _test_latest_xslt()
+                        st.session_state.latest_test_result = test_result
+                        st.session_state.latest_test_output = test_output
+                        if not test_result:
+                            st.session_state.review_status = (
+                                st.session_state.test_readiness_status
+                                or "No latest test result was produced."
+                            )
+                    except Exception as ex:
+                        st.session_state.latest_test_result = None
+                        st.session_state.latest_test_output = None
+                        st.session_state.review_status = f"Latest test failed: {ex}"
+                st.rerun()
+
+        if st.session_state.review_status:
+            if "failed" in str(st.session_state.review_status).lower():
+                st.error(st.session_state.review_status)
+            else:
+                st.success(st.session_state.review_status)
+
+        if st.session_state.test_readiness_status:
+            if "ready" in str(st.session_state.test_readiness_status).lower():
+                st.caption(f"Test readiness: {st.session_state.test_readiness_status}")
+            else:
+                st.warning(st.session_state.test_readiness_status)
+
+        if st.session_state.latest_test_result:
+            st.markdown("#### Latest Test Result")
+            st.markdown(st.session_state.latest_test_result)
+            if st.session_state.latest_test_output:
+                st.markdown("#### Latest Transform Output")
+                st.code(st.session_state.latest_test_output, language="xml")
+                st.download_button(
+                    label="⬇ Download transform output (XML)",
+                    data=st.session_state.latest_test_output.encode("utf-8"),
+                    file_name=f"{st.session_state.session.session_id}_test_output.xml",
+                    mime="application/xml",
+                    use_container_width=False,
+                    key="dl_test_output",
+                )
+            else:
+                st.info("No real XML transform output was produced; the test used LLM simulation.")
+
+    # ── Inline audit form ──────────────────────────────────────────────────────
+    if st.session_state.audit_dict is not None:
+        audit_dict = st.session_state.audit_dict
+        questions  = audit_dict.get("questions", [])
+        summary    = audit_dict.get("summary", "")
+
+        st.divider()
+        st.markdown("### 📋 Audit Verification Form")
+
+        if summary:
+            if "CRITICAL" in summary and not summary.startswith("0 CRITICAL"):
+                st.error(f"**Audit Summary:** {summary}")
+            elif "WARNING" in summary and not summary.startswith("0 CRITICAL, 0 WARNING"):
+                st.warning(f"**Audit Summary:** {summary}")
+            else:
+                st.success(f"**Audit Summary:** {summary}")
+
+        if questions:
+            st.caption(
+                "Answer the questions below so the agent can verify your mapping "
+                "is production-ready, then click **Submit Answers**."
+            )
+            SEV_ICON = {"FAIL": "🔴", "WARNING": "🟡", "INFO": "🔵"}
+
+            with st.form("audit_followup_form"):
+                answers = []
+                for q in questions:
+                    sev  = q.get("severity", "INFO")
+                    cat  = q.get("category", "")
+                    cv   = q.get("current_value")
+                    icon = SEV_ICON.get(sev, "⚪")
+                    lbl  = f"{icon} **[{sev}]** [{cat}] {q['question']}"
+                    if cv is not None:
+                        lbl += f"  *(current value: `{cv}`)*"
+                    st.markdown(lbl)
+                    ans = st.text_input(
+                        "Your answer",
+                        key=f"aq_{q['id']}",
+                        label_visibility="collapsed",
+                        placeholder="Type your answer here…",
+                    )
+                    answers.append({"id": q["id"], "question": q["question"], "answer": ans})
+                    st.markdown("---")
+
+                submitted = st.form_submit_button(
+                    "✅ Submit Answers for Verification",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+            if submitted:
+                ingested_ref = (
+                    st.session_state.audit_ingested
+                    or st.session_state.session.ingested
+                )
+                if ingested_ref is None:
+                    st.error("No ingested file context available for followup.")
+                else:
+                    with st.spinner("Running second-pass verification…"):
+                        try:
+                            followup, _ = audit_followup(
+                                ingested_ref,
+                                answers,
+                                api_key=st.session_state.get("llm_api_key") or None,
+                                provider=st.session_state.get("llm_provider", "groq"),
+                            )
+                        except Exception as ex:
+                            followup = f"[ERROR] {ex}"
+
+                    if "DO NOT DEPLOY" in followup.upper():
+                        st.error("### Verification Result")
+                        st.error(followup)
+                    elif "REVIEW REQUIRED" in followup.upper():
+                        st.warning("### Verification Result")
+                        st.warning(followup)
+                    else:
+                        st.success("### Verification Result")
+                        st.success(followup)
+
+                    st.session_state.messages.append({
+                        "role":    "assistant",
+                        "content": f"**Audit Verification Result**\n\n{followup}",
+                        "intent":  "audit",
+                    })
+                    st.session_state.audit_dict     = None
+                    st.session_state.audit_ingested = None
                     st.rerun()
         else:
-            st.caption("No approved versions stored yet (approve one to enable rollback).")
-
-    with btn_test:
-        if st.button("🧪 Test latest XSLT", use_container_width=True):
-            with st.spinner("Testing latest revised XSLT…"):
-                try:
-                    test_result, test_output = _test_latest_xslt()
-                    st.session_state.latest_test_result = test_result
-                    st.session_state.latest_test_output = test_output
-                    if not test_result:
-                        st.session_state.review_status = (
-                            st.session_state.test_readiness_status
-                            or "No latest test result was produced."
-                        )
-                except Exception as ex:
-                    st.session_state.latest_test_result = None
-                    st.session_state.latest_test_output = None
-                    st.session_state.review_status = f"Latest test failed: {ex}"
-            st.rerun()
-
-    if st.session_state.review_status:
-        if "failed" in str(st.session_state.review_status).lower():
-            st.error(st.session_state.review_status)
-        else:
-            st.success(st.session_state.review_status)
-
-    if st.session_state.test_readiness_status:
-        if "ready" in str(st.session_state.test_readiness_status).lower():
-            st.caption(f"Test readiness: {st.session_state.test_readiness_status}")
-        else:
-            st.warning(st.session_state.test_readiness_status)
-
-    if st.session_state.latest_test_result:
-        st.markdown("#### Latest Test Result")
-        st.markdown(st.session_state.latest_test_result)
-        if st.session_state.latest_test_output:
-            st.markdown("#### Latest Transform Output")
-            st.code(st.session_state.latest_test_output, language="xml")
-        else:
-            st.info("No real XML transform output was produced; the test used dry-run or LLM simulation.")
-
-
-# ── Inline audit form ──────────────────────────────────────────────────────────
-if st.session_state.audit_dict is not None:
-    audit_dict = st.session_state.audit_dict
-    questions  = audit_dict.get("questions", [])
-    summary    = audit_dict.get("summary", "")
-
-    st.divider()
-    st.markdown("### 📋 Audit Verification Form")
-
-    if summary:
-        if "CRITICAL" in summary and not summary.startswith("0 CRITICAL"):
-            st.error(f"**Audit Summary:** {summary}")
-        elif "WARNING" in summary and not summary.startswith("0 CRITICAL, 0 WARNING"):
-            st.warning(f"**Audit Summary:** {summary}")
-        else:
-            st.success(f"**Audit Summary:** {summary}")
-
-    if questions:
-        st.caption(
-            "Answer the questions below so the agent can verify your mapping "
-            "is production-ready, then click **Submit Answers**."
-        )
-        SEV_ICON = {"FAIL": "🔴", "WARNING": "🟡", "INFO": "🔵"}
-
-        with st.form("audit_followup_form"):
-            answers = []
-            for q in questions:
-                sev  = q.get("severity", "INFO")
-                cat  = q.get("category", "")
-                cv   = q.get("current_value")
-                icon = SEV_ICON.get(sev, "⚪")
-                lbl  = f"{icon} **[{sev}]** [{cat}] {q['question']}"
-                if cv is not None:
-                    lbl += f"  *(current value: `{cv}`)*"
-                st.markdown(lbl)
-                ans = st.text_input(
-                    "Your answer",
-                    key=f"aq_{q['id']}",
-                    label_visibility="collapsed",
-                    placeholder="Type your answer here…",
-                )
-                answers.append({"id": q["id"], "question": q["question"], "answer": ans})
-                st.markdown("---")
-
-            submitted = st.form_submit_button(
-                "✅ Submit Answers for Verification",
-                use_container_width=True,
-                type="primary",
-            )
-
-        if submitted:
-            ingested_ref = (
-                st.session_state.audit_ingested
-                or st.session_state.session.ingested
-            )
-            if ingested_ref is None:
-                st.error("No ingested file context available for followup.")
-            else:
-                with st.spinner("Running second-pass verification…"):
-                    try:
-                        followup, _ = audit_followup(
-                            ingested_ref,
-                            answers,
-                            api_key=st.session_state.get("llm_api_key") or None,
-                            provider=st.session_state.get("llm_provider", "groq"),
-                        )
-                    except Exception as ex:
-                        followup = f"[ERROR] {ex}"
-
-                if "DO NOT DEPLOY" in followup.upper():
-                    st.error("### Verification Result")
-                    st.error(followup)
-                elif "REVIEW REQUIRED" in followup.upper():
-                    st.warning("### Verification Result")
-                    st.warning(followup)
-                else:
-                    st.success("### Verification Result")
-                    st.success(followup)
-
-                st.session_state.messages.append({
-                    "role":    "assistant",
-                    "content": f"**Audit Verification Result**\n\n{followup}",
-                    "intent":  "audit",
-                })
+            st.info("The audit found no specific questions. Review the report above.")
+            if st.button("Clear Audit Form"):
                 st.session_state.audit_dict     = None
                 st.session_state.audit_ingested = None
                 st.rerun()
-    else:
-        st.info("The audit found no specific questions. Review the report above.")
-        if st.button("Clear Audit Form"):
-            st.session_state.audit_dict     = None
-            st.session_state.audit_ingested = None
-            st.rerun()
-
-
-# ── Attachment popover (compact file upload near the chat input) ───────────────
-# Capture the uploader return value OUTSIDE the popover context so that
-# st.rerun() is never called from inside the popover block.  Calling rerun
-# from inside a with-st.popover() raises StopException before the context
-# manager exits cleanly, which silently discards any session_state changes
-# made inside the block.
-_inline_uploads = None
-with st.popover("📎 Attach files", use_container_width=False):
-    st.caption("Upload mapping files to use in the chat.")
-    _inline_uploads = st.file_uploader(
-        "Attach files",
-        type=["xml", "xsl", "xslt", "xsd", "edi", "txt"],
-        accept_multiple_files=True,
-        key="inline_uploader",
-        label_visibility="collapsed",
-    )
-
-# Process new inline uploads AFTER the popover context has closed.
-# We ingest immediately here so the file is available to the agent
-# even before the user sends their first message.  pending_paths is
-# used as a fallback only when ingest itself fails.
-if _inline_uploads:
-    _known = _active_file_names()
-    _new_inline = [f for f in _inline_uploads if f.name not in _known]
-    if _new_inline:
-        for _uf in _new_inline:
-            _saved = _save_upload(_uf)
-            st.session_state.active_files.append({"name": _uf.name, "path": _saved})
-            try:
-                _ing = ingest_file(file_path=_saved)
-                st.session_state.session.add_file(_ing)
-            except Exception:
-                # Ingest failed — queue for dispatch as a safe fallback
-                st.session_state.pending_paths.append(_saved)
-        st.rerun()
-
-# ── Chat input ─────────────────────────────────────────────────────────────────
-user_input = st.chat_input("Ask anything about your mapping files…")
-
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
-
-    _active_provider = st.session_state.get("llm_provider", "groq")
-    _active_api_key  = st.session_state.get("llm_api_key", "")
-
-    with st.spinner("Thinking…"):
-        try:
-            result = dispatch(
-                user_message=user_input,
-                file_paths=st.session_state.pending_paths,
-                session=st.session_state.session,
-                provider=_active_provider,
-                api_key=_active_api_key or None,
-            )
-            dispatch_error = None
-        except Exception as ex:
-            result        = None
-            dispatch_error = str(ex)
-
-    # Clear pending paths — session now owns the ingested dicts
-    st.session_state.pending_paths = []
-
-    download_xslt     = None   # type: Optional[str]
-    download_filename = None   # type: Optional[str]
-    download_label    = None   # type: Optional[str]
-
-    if result is None:
-        response_text = f"⚠️ Error: {dispatch_error}"
-        intent        = "error"
-        file_used     = ""
-    else:
-        response_text = result["primary_response"] or "_No response generated._"
-        intent        = result["route"].get("primary", "unknown")
-        file_used     = result.get("primary_file_name", "")
-        st.session_state.last_route = result["route"]
-
-        # Capture XSLT for review panel (generate / modify)
-        ing = result.get("ingested") or {}
-        before = None
-        try:
-            before = (ing.get("parsed_content") or {}).get("raw_xml")
-        except Exception:
-            before = None
-        extracted = None
-        if intent == "generate":
-            extracted = _extract_xml_fence(response_text)
-        elif intent == "modify":
-            extracted = _extract_modify_after_block(response_text) or _extract_xml_fence(response_text)
-        if extracted:
-            st.session_state.review_before_xslt = before
-            st.session_state.review_after_xslt = extracted
-            st.session_state.review_rule_key = file_used or "generated_xslt"
-            st.session_state.latest_test_result = None
-            st.session_state.latest_test_output = None
-
-        # Structured comparison + revision metadata (modify intent)
-        if result.get("comparison_data"):
-            comp = result["comparison_data"]
-            st.session_state.review_before_xslt = comp.get("old_xslt") or st.session_state.review_before_xslt
-            st.session_state.review_after_xslt = comp.get("new_xslt") or st.session_state.review_after_xslt
-            summary_parts = []
-            if result.get("change_summary"):
-                summary_parts.append(str(result["change_summary"]))
-            if comp.get("summary"):
-                summary_parts.append(str(comp["summary"]))
-            st.session_state.comparison_summary = " | ".join(summary_parts)
-        else:
-            st.session_state.comparison_summary = result.get("change_summary", "") or ""
-
-        st.session_state.latest_version_path = result.get("latest_version_path", "") or ""
-        st.session_state.test_readiness_status = result.get("test_readiness_status", "") or ""
-
-        if result.get("audit_dict") is not None:
-            st.session_state.audit_dict     = result["audit_dict"]
-            st.session_state.audit_ingested = result.get("ingested")
-
-        # ── Auto-ingest patched/generated XSLT back into session ─────────────
-
-        patched          = result.get("patched_xslt")
-        generated        = result.get("generated_xslt")
-        simulate_out     = result.get("simulate_output")
-        _sid             = st.session_state.session.session_id
-
-        if patched and intent == "modify":
-            # raw_orig is the metadata filename (includes session-id prefix)
-            _raw_orig = result.get("primary_file_name", "mapping.xml")
-            # Strip session-id prefix to get a clean display name
-            if _raw_orig.startswith(_sid + "_"):
-                _orig_display = _raw_orig[len(_sid) + 1:]
-            else:
-                _orig_display = _raw_orig
-            _stem             = _orig_display.rsplit(".", 1)[0] if "." in _orig_display else _orig_display
-            _new_display      = f"{_stem}_patched.xml"
-            download_filename = f"{_sid}_{_new_display}"
-            download_label    = f"Download {_new_display}"
-            download_xslt     = patched
-            try:
-                _ingest_and_update_session(
-                    patched,
-                    download_filename,
-                    original_name=_raw_orig,    # metadata filename for session lookup
-                    chip_name=_orig_display,    # display name for chip update
-                )
-            except Exception:
-                pass   # ingest failure is non-fatal; user can still download
-
-        elif simulate_out and intent == "simulate":
-            download_filename = f"{_sid}_transform_output.xml"
-            download_label    = "Download transform output (XML)"
-            download_xslt     = simulate_out
-
-        elif generated and intent == "generate":
-            download_filename = f"{_sid}_generated.xml"
-            download_label    = "Download generated XSLT"
-            download_xslt     = generated
-            # Strip the full ```xml ... ``` block from the chat message — it goes
-            # into the download, not the conversation.  Keep the prose description.
-            response_text = _re.sub(
-                r"```xml[\s\S]*?```",
-                "_Full XSLT is available via the download button below._",
-                response_text,
-                count=1,
-            )
-            try:
-                _ingest_and_update_session(generated, download_filename, original_name=None)
-            except Exception:
-                pass
-
-    st.session_state.messages.append({
-        "role":              "assistant",
-        "content":           response_text,
-        "intent":            intent,
-        "file_used":         file_used,
-        "download_xslt":     download_xslt,
-        "download_filename": download_filename,
-        "download_label":    download_label,
-    })
-    st.rerun()

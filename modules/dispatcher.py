@@ -306,6 +306,7 @@ def dispatch(
     agent: Any = None
     audit_dict: Optional[Dict] = None
     patched_xslt: Optional[str] = None
+    generated_xslt: Optional[str] = None
     simulate_output: Optional[str] = None
     updated_xslt: Optional[str] = None
     change_summary: str = ""
@@ -448,13 +449,31 @@ def dispatch(
 
         elif intent == "generate":
             msg = _ctx_prefix + user_message
-            response, _ = generate(
+            response, generated_xslt = generate(
                 generation_request=msg,
                 source_sample=source_file,
                 api_key=api_key,
                 model=resolved_model,
             )
             responses[intent] = response
+            # After generate, register the new XSLT in the session so that
+            # subsequent simulate/explain/modify calls use the generated file.
+            if generated_xslt and session is not None:
+                _uploads = Path(__file__).resolve().parent.parent / "data" / "uploads"
+                _uploads.mkdir(parents=True, exist_ok=True)
+                _sid = getattr(session, "session_id", "session")
+                _gen_path = _uploads / f"{_sid}_generated.xml"
+                try:
+                    _gen_path.write_text(generated_xslt, encoding="utf-8")
+                    try:
+                        from .file_ingestion import ingest_file as _ingest
+                    except ImportError:
+                        from file_ingestion import ingest_file as _ingest
+                    _gen_ing = _ingest(file_path=str(_gen_path))
+                    session.add_file(_gen_ing)
+                    updated_xslt = generated_xslt
+                except Exception:
+                    pass   # non-fatal — caller can still download the XSLT
             # Auto-audit: append audit findings to the generated XSLT
             if ingested is not None:
                 _audit_resp, _ = audit(
@@ -505,6 +524,7 @@ def dispatch(
         "ingested":           ingested,
         "audit_dict":         audit_dict,
         "patched_xslt":       patched_xslt,
+        "generated_xslt":     generated_xslt,
         "updated_xslt":       updated_xslt,
         "change_summary":     change_summary,
         "comparison_data":    comparison_data,
