@@ -355,6 +355,8 @@ with st.sidebar:
     if user:
         st.markdown(f"**{user['name']}**  \n*{user['role']}*")
         if st.button("Sign out", use_container_width=True):
+            from modules.usage_tracker import reset_session_stats
+            reset_session_stats()
             for key in ["logged_in", "current_user", "session", "messages",
                         "active_files", "pending_paths", "audit_dict",
                         "audit_ingested", "last_route", "llm_provider", "llm_api_key"]:
@@ -486,6 +488,8 @@ with st.sidebar:
     # ── Session controls ───────────────────────────────────────────────────────
     st.markdown("**Session**")
     if st.button("New Session", use_container_width=True):
+        from modules.usage_tracker import reset_session_stats
+        reset_session_stats()
         st.session_state.session.reset()
         st.session_state.messages       = []
         st.session_state.active_files   = []
@@ -522,6 +526,44 @@ with st.sidebar:
                 st.caption(f"- {f.get('metadata', {}).get('filename', '?')}")
         else:
             st.caption("No message sent yet.")
+
+    st.divider()
+
+    # ── Token Usage & Cost ─────────────────────────────────────────────────────
+    from modules.usage_tracker import get_session_stats, PRICING_COMPARISON
+
+    st.markdown("**Token Usage & Cost**")
+    _stats = get_session_stats()
+
+    if _stats["calls"] == 0:
+        st.caption("No API calls made yet this session.")
+    else:
+        # Last call
+        lc = _stats["last_call"]
+        st.caption("**Last call**")
+        lc_cols = st.columns(3)
+        lc_cols[0].metric("Input", f"{lc['prompt_tokens']:,}")
+        lc_cols[1].metric("Output", f"{lc['completion_tokens']:,}")
+        lc_cols[2].metric("Cost", f"${lc['cost_usd']:.5f}")
+        st.caption(f"`{lc['model']}` via {lc['provider']} · {lc['latency_ms']:.0f} ms · called by `{lc['caller']}`")
+
+        # Session totals
+        st.caption("**Session total**")
+        st_cols = st.columns(3)
+        st_cols[0].metric("Calls", _stats["calls"])
+        st_cols[1].metric("Tokens", f"{_stats['total_tokens']:,}")
+        st_cols[2].metric("Est. cost", f"${_stats['estimated_cost_usd']:.4f}")
+
+    # Pricing comparison table
+    with st.expander("Model pricing comparison", expanded=False):
+        st.caption("Prices in USD per 1 million tokens")
+        _hdr = "| Model | Provider | Input/1M | Output/1M |"
+        _sep = "|---|---|---|---|"
+        _rows = "\n".join(
+            f"| `{r['model']}` | {r['provider']} | ${r['input_per_1M']:.2f} | ${r['output_per_1M']:.2f} |"
+            for r in PRICING_COMPARISON
+        )
+        st.markdown(f"{_hdr}\n{_sep}\n{_rows}")
 
     st.divider()
     st.caption("PartnerLinQ · Industry Practicum · 2026")
