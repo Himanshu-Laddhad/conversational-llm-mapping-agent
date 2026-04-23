@@ -96,6 +96,56 @@ Rules:
 """
 
 
+def _extract_xslt_template_chunks(parsed: dict) -> list[str]:
+    """
+    Build template-level chunks for XSLT retrieval.
+    Includes template identity, output elements, value-of xpaths, conditionals,
+    hardcoded values, and a raw_xml context window (~10 lines around template).
+    """
+    chunks: list[str] = []
+    tcg = parsed.get("template_call_graph") or []
+    raw_xml = parsed.get("raw_xml", "") or ""
+    raw_lines = raw_xml.splitlines()
+
+    for t in tcg[:60]:
+        label = t.get("name") or t.get("match") or "anonymous"
+        mode = t.get("mode") or "default"
+        outputs = ", ".join((t.get("output_elements") or [])[:12])
+        value_of = (t.get("value_of") or [])[:20]
+        for_each = (t.get("for_each") or [])[:8]
+        conditionals = [c.get("test") for c in (t.get("conditionals") or []) if c.get("test")]
+        calls = [c.get("callee") for c in (t.get("calls") or []) if c.get("callee")]
+
+        context_text = ""
+        # template_call_graph entries currently do not include line ranges;
+        # use a lightweight best-effort match in raw XML for 10+ line context.
+        if raw_lines:
+            needle = f'name="{t.get("name")}"' if t.get("name") else (
+                f'match="{t.get("match")}"' if t.get("match") else ""
+            )
+            if needle:
+                for i, ln in enumerate(raw_lines):
+                    if "<xsl:template" in ln and needle in ln:
+                        start = max(0, i - 10)
+                        end = min(len(raw_lines), i + 25)
+                        context_text = "\n".join(raw_lines[start:end])
+                        break
+
+        chunk = (
+            f"TEMPLATE: {label} (mode={mode})\n"
+            f"OUTPUT_ELEMENTS: {outputs}\n"
+            f"VALUE_OF_XPATHS: {json.dumps(value_of, default=str)}\n"
+            f"FOR_EACH_XPATHS: {json.dumps(for_each, default=str)}\n"
+            f"CONDITIONAL_TESTS: {json.dumps(conditionals, default=str)}\n"
+            f"CALLS: {json.dumps(calls, default=str)}\n"
+        )
+        if context_text:
+            chunk += f"RAW_CONTEXT:\n{context_text}\n"
+        chunks.append(chunk)
+
+    return chunks
+
+
 # ── Text extraction helpers ───────────────────────────────────────────────────
 
 def _extract_text(ingested: dict) -> str:
@@ -111,16 +161,20 @@ def _extract_text(ingested: dict) -> str:
     parts = [f"File: {filename}", f"Type: {file_type}"]
 
     if file_type == "XSLT":
-        # Include field_mappings, hardcoded_values, templates — same slice as simulate
+        # Template-level indexing with semantic hints for dynamic discovery.
+        template_chunks = _extract_xslt_template_chunks(parsed)
+        if template_chunks:
+            parts.append("XSLT_TEMPLATE_CHUNKS:")
+            parts.extend(template_chunks[:12])
         relevant = {
             k: parsed[k]
-            for k in ("field_mappings", "hardcoded_values", "templates")
+            for k in ("hardcoded_values", "entry_points", "mode_index")
             if k in parsed and parsed[k]
         }
         if relevant:
             parts.append(json.dumps(relevant, default=str))
-        elif parsed.get("raw_xml"):
-            parts.append(parsed["raw_xml"][:1_000])
+        if parsed.get("raw_xml"):
+            parts.append("RAW_PREVIEW:\n" + parsed["raw_xml"][:1200])
 
     elif file_type in ("XML", "XSD"):
         # Namespaces + root element summary

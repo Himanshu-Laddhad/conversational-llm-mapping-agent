@@ -62,7 +62,7 @@ Usage (standalone test)::
 import os
 import re
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, List, Dict
 
 from dotenv import load_dotenv
 
@@ -77,25 +77,35 @@ for _candidate in [_here / ".env", _here.parent / ".env"]:
 # Constants
 # ---------------------------------------------------------------------------
 
-# Max XSLT characters sent to the LLM (token budget).
-# The FULL source is kept separately for patch application.
-_MAX_XSLT_CHARS = 10_000
+# Max total candidate-block characters sent to the LLM.
+_MAX_CANDIDATE_CONTEXT_CHARS = 14_000
 
 # Max tokens for LLM output.
 _MAX_OUTPUT_TOKENS = 1_500
+
+_FIELD_HINTS = ("IT104", "IT102", "Qty", "LineAmountMST", "InvoiceDate")
+_STOPWORDS = {
+    "the", "and", "for", "with", "from", "into", "that", "this", "then",
+    "add", "remove", "change", "modify", "update", "replace", "field",
+    "value", "mapping", "segment", "line", "item", "row", "template",
+    "select", "output", "node", "xml", "xslt", "xsl", "new", "existing",
+    "please", "request", "real", "block",
+}
+
+_XSL_NS = {"xsl": "http://www.w3.org/1999/XSL/Transform"}
 
 _SYSTEM_PROMPT = """\
 You are an expert XSLT 2.0 developer specialising in Altova MapForce stylesheets \
 that transform D365 XML (Microsoft Dynamics 365) into X12 EDI XML.
 
 The user will give you:
-  1. The current XSLT source (possibly truncated for length).
+  1. Candidate blocks extracted from the REAL full XSLT file.
   2. A modification request in plain English.
 
 Your task is to produce a MINIMAL, SURGICAL change that fulfils the request \
 without breaking any other part of the stylesheet.
 
-Return your answer in EXACTLY this format -- no extra sections, no deviation:
+Return your answer in EXACTLY one of these formats -- no extra sections:
 
 ## CHANGE SUMMARY
 <one sentence describing what you are changing and why>
@@ -113,6 +123,14 @@ copy them character-for-character including indentation>
 
 ## EXPLANATION
 <2-4 sentences: what the change does, any caveats, and how to apply it>
+
+OR (if you cannot copy an exact BEFORE snippet):
+
+## FAILURE
+<one sentence explaining why an exact BEFORE snippet is not possible from the provided candidates>
+
+## EXPLANATION
+<2-4 sentences naming which candidate(s) were close and what is missing>
 
 RULES FOR COMMON MODIFICATION TYPES
 -------------------------------------
@@ -160,6 +178,13 @@ General rules:
 - Never modify <xsl:stylesheet> declaration or core:* utility templates unless asked.
 - Keep hardcoded values as string literals unless asked to parameterise.
 - Do not return the entire modified file -- only the changed block.
+- The BEFORE block MUST be copied EXACTLY from the provided real candidate blocks.
+- BEFORE must be character-for-character identical to one provided snippet:
+  same indentation, spaces, quotes, attribute order, and line breaks.
+- Do NOT normalize whitespace, rename variables, shorten XPath, or paraphrase XML/XSLT in BEFORE.
+- Prefer the SMALLEST exact replaceable snippet (single xsl:value-of line first; then minimal multi-line block).
+- AFTER must preserve the same surrounding structure and only change the target expression.
+- If a required anchor does not exist in those real blocks, leave BEFORE/AFTER empty and say so in EXPLANATION.
 - Match the indentation of the surrounding code exactly.
 """
 
@@ -168,6 +193,22 @@ General rules:
 # Patch utilities (public so tests can import them directly)
 # ---------------------------------------------------------------------------
 
+def _extract_section_text(response_text: str, title: str) -> str:
+    """Extract a markdown section body, fenced or plain."""
+    m = re.search(
+        rf"##\s*{re.escape(title)}\s*\n(.*?)(?=\n##|\Z)",
+        response_text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return ""
+    body = m.group(1)
+    fenced = re.search(r"```(?:xml)?\s*\n(.*?)```", body, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip("\n")
+    return body.strip()
+
+
 def _parse_patch(response_text: str) -> dict:
     """
     Extract CHANGE SUMMARY, BEFORE, AFTER, and EXPLANATION from the LLM response.
@@ -175,42 +216,356 @@ def _parse_patch(response_text: str) -> dict:
     Returns a dict with keys: summary, before, after, explanation.
     Any missing section returns an empty string.
     """
-    result = {"summary": "", "before": "", "after": "", "explanation": ""}
-
-    m = re.search(
-        r"##\s*CHANGE SUMMARY\s*\n(.*?)(?=\n##|\Z)",
-        response_text, re.DOTALL | re.IGNORECASE,
-    )
-    if m:
-        result["summary"] = m.group(1).strip()
-
-    m = re.search(
-        r"##\s*BEFORE\s*\n```(?:xml)?\s*\n(.*?)```",
-        response_text, re.DOTALL | re.IGNORECASE,
-    )
-    if m:
-        result["before"] = m.group(1).rstrip()
-
-    m = re.search(
-        r"##\s*AFTER\s*\n```(?:xml)?\s*\n(.*?)```",
-        response_text, re.DOTALL | re.IGNORECASE,
-    )
-    if m:
-        result["after"] = m.group(1).rstrip()
-
-    m = re.search(
-        r"##\s*EXPLANATION\s*\n(.*?)(?=\n##|\Z)",
-        response_text, re.DOTALL | re.IGNORECASE,
-    )
-    if m:
-        result["explanation"] = m.group(1).strip()
-
+    result = {"summary": "", "before": "", "after": "", "explanation": "", "failure": ""}
+    result["summary"] = _extract_section_text(response_text, "CHANGE SUMMARY")
+    result["before"] = _extract_section_text(response_text, "BEFORE")
+    result["after"] = _extract_section_text(response_text, "AFTER")
+    result["explanation"] = _extract_section_text(response_text, "EXPLANATION")
+    result["failure"] = _extract_section_text(response_text, "FAILURE")
     return result
 
 
 def _normalize_ws(text: str) -> str:
     """Collapse all whitespace runs to a single space for fuzzy matching."""
     return re.sub(r"\s+", " ", text).strip()
+
+
+def generate_field_variations(description: str) -> list:
+    """Generate fuzzy field/segment variations from user wording."""
+    if not description:
+        return []
+    base = description.strip()
+    words = [w for w in re.findall(r"[A-Za-z0-9]+", base) if w]
+    joined_snake = "_".join(w.lower() for w in words)
+    joined_camel = "".join(w.capitalize() for w in words)
+    compact = "".join(words)
+    variants = {
+        base, base.lower(), base.upper(),
+        joined_snake, joined_snake.upper(),
+        joined_camel, compact, compact.lower(), compact.upper(),
+    }
+    synonyms = {
+        "invoice date": ["InvoiceDate", "InvDate", "BIG01", "DTM02", "invoice_dt", "DocDate"],
+        "date": ["InvoiceDate", "DlvDate", "DueDate", "BIG01", "DTM02", "Date"],
+        "price": ["Price", "UnitPrice", "SalesPrice", "ItemPrice", "IT104", "LineAmountMST"],
+        "quantity": ["Qty", "Quantity", "OrderQty", "IT102", "InventQty"],
+        "qty": ["Qty", "Quantity", "OrderQty", "IT102", "InventQty"],
+    }
+    lower = base.lower()
+    for key, vals in synonyms.items():
+        if key in lower:
+            variants.update(vals)
+    return [v for v in variants if v]
+
+
+def semantic_match_confirmed(xml_nodes, user_description: str) -> bool:
+    """Heuristic semantic confirmation of node relevance."""
+    if not xml_nodes:
+        return False
+    desc_terms = {t.lower() for t in generate_field_variations(user_description)}
+    for node in xml_nodes:
+        payload = " ".join([
+            getattr(node, "tag", "") or "",
+            (node.get("name") or "") if hasattr(node, "get") else "",
+            (node.get("select") or "") if hasattr(node, "get") else "",
+            (node.text or "") if hasattr(node, "text") and node.text else "",
+        ]).lower()
+        if any(term and term.lower() in payload for term in desc_terms):
+            return True
+    # fallback accept first node when search already constrained
+    return True
+
+
+def _extract_location_from_element(element, xslt_content: str) -> dict:
+    lines = xslt_content.splitlines()
+    line = int(getattr(element, "sourceline", 1) or 1)
+    start = max(1, line - 10)
+    end = min(len(lines), line + 10)
+    ctx_before = "\n".join(lines[start - 1: line - 1])
+    ctx_after = "\n".join(lines[line: end])
+    select = element.get("select") if hasattr(element, "get") else ""
+    from lxml import etree  # noqa: PLC0415
+    root = element.getroottree()
+    xpath_loc = root.getpath(element) if root is not None else ""
+    return {
+        "found": True,
+        "xpath_location": xpath_loc,
+        "line_number": line,
+        "current_value": select or (element.text or ""),
+        "context_before": ctx_before,
+        "context_after": ctx_after,
+        "insertion_point": "",
+    }
+
+
+def _find_best_template_for_insertion(tree, user_field_description: str):
+    templates = tree.xpath("//xsl:template", namespaces=_XSL_NS)
+    if not templates:
+        return None
+    desc_terms = [t.lower() for t in generate_field_variations(user_field_description)]
+    best = templates[0]
+    best_score = -1
+    for t in templates:
+        text = " ".join([
+            t.get("name", "") or "",
+            t.get("match", "") or "",
+            "".join((e.get("name", "") or "") for e in t.xpath(".//xsl:element", namespaces=_XSL_NS)),
+        ]).lower()
+        score = sum(1 for term in desc_terms if term and term in text)
+        if score > best_score:
+            best, best_score = t, score
+    return best
+
+
+def locate_element_in_xslt(xslt_content: str, user_field_description: str, rag_engine=None) -> dict:
+    """
+    Multi-strategy element location with robust fallback.
+    """
+    # Strategy 1: RAG engine search (best-effort; optional interface)
+    if rag_engine is not None and hasattr(rag_engine, "search"):
+        try:
+            rag_results = rag_engine.search(user_field_description, top_k=5)
+            if rag_results:
+                top = rag_results[0]
+                if isinstance(top, dict) and float(top.get("confidence", 0.0)) > 0.7:
+                    line = int(top.get("line_number", 1))
+                    lines = xslt_content.splitlines()
+                    return {
+                        "found": True,
+                        "xpath_location": str(top.get("xpath_location", "")),
+                        "line_number": line,
+                        "current_value": str(top.get("current_value", "")),
+                        "context_before": "\n".join(lines[max(0, line - 11): max(0, line - 1)]),
+                        "context_after": "\n".join(lines[line: min(len(lines), line + 10)]),
+                        "insertion_point": "",
+                    }
+        except Exception:
+            pass
+
+    # Strategy 2: full XML DOM parse
+    from lxml import etree  # noqa: PLC0415
+    parser = etree.XMLParser(remove_blank_text=False, recover=True)
+    tree = etree.fromstring(xslt_content.encode("utf-8"), parser=parser)
+
+    # Strategy 3: fuzzy names
+    possible_names = generate_field_variations(user_field_description)
+
+    # Strategy 4: XPath search patterns
+    xpaths_to_try = []
+    for name in possible_names[:50]:
+        safe = name.replace("'", "")
+        xpaths_to_try.extend([
+            f"//xsl:value-of[contains(translate(@select,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{safe.lower()}')]",
+            f"//xsl:attribute[@name='{safe}']",
+            f"//xsl:element[@name='{safe}']",
+        ])
+    xpaths_to_try.append("//xsl:value-of")
+
+    for xp in xpaths_to_try:
+        try:
+            matches = tree.xpath(xp, namespaces=_XSL_NS)
+        except Exception:
+            matches = []
+        if matches and semantic_match_confirmed(matches, user_field_description):
+            return _extract_location_from_element(matches[0], xslt_content)
+
+    # Strategy 5: insertion point
+    template = _find_best_template_for_insertion(tree, user_field_description)
+    if template is not None:
+        line = int(getattr(template, "sourceline", 1) or 1)
+        return {
+            "found": False,
+            "xpath_location": "",
+            "line_number": line,
+            "current_value": "",
+            "context_before": "",
+            "context_after": "",
+            "insertion_point": f"//xsl:template[@name='{template.get('name','')}' or @match='{template.get('match','')}']",
+            "suggestion": f"Field not found. Suggest adding to template at line {line}.",
+        }
+    return {
+        "found": False,
+        "xpath_location": "",
+        "line_number": 1,
+        "current_value": "",
+        "context_before": "",
+        "context_after": "",
+        "insertion_point": "//xsl:stylesheet",
+        "suggestion": "Field not found. Suggest adding mapping at stylesheet level.",
+    }
+
+
+def apply_modification_via_dom(xslt_tree, modification_spec) -> Any:
+    """Apply XSLT modification via DOM/XPath."""
+    target_xpath = modification_spec.get("target_xpath", "")
+    if not target_xpath:
+        raise ValueError("Missing target_xpath in modification_spec")
+    target_nodes = xslt_tree.xpath(target_xpath, namespaces=_XSL_NS)
+    if not target_nodes:
+        raise ValueError(f"ElementNotFoundError: {target_xpath}")
+    node = target_nodes[0]
+    action = modification_spec.get("action", "replace_value")
+    if action in ("replace_value", "add_calculation"):
+        node.set("select", modification_spec.get("new_expression", ""))
+    elif action == "change_format":
+        current_select = node.get("select", "")
+        fmt = modification_spec.get("format", "0.000")
+        node.set("select", f"format-number({current_select}, '{fmt}')")
+    else:
+        node.set("select", modification_spec.get("new_expression", ""))
+    from lxml import etree  # noqa: PLC0415
+    _ = etree.tostring(xslt_tree)
+    return xslt_tree
+
+
+def _extract_search_terms(modification_request: str) -> List[str]:
+    """Extract likely XSLT field/template identifiers from user request."""
+    tokens = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", modification_request or "")
+    terms = []
+    for tok in tokens:
+        if tok.lower() in _STOPWORDS:
+            continue
+        if tok not in terms:
+            terms.append(tok)
+    # Prioritize well-known field hints when explicitly present in the request.
+    ordered = [h for h in _FIELD_HINTS if re.search(rf"\b{re.escape(h)}\b", modification_request, re.IGNORECASE)]
+    for t in terms:
+        if t not in ordered:
+            ordered.append(t)
+    return ordered[:20]
+
+
+def _find_template_bounds(lines: List[str], line_idx: int) -> Tuple[int, int]:
+    """Find approximate enclosing xsl:template bounds for a matched line."""
+    start = max(0, line_idx - 20)
+    end = min(len(lines) - 1, line_idx + 20)
+    for i in range(line_idx, -1, -1):
+        if "<xsl:template" in lines[i]:
+            start = i
+            break
+    for j in range(line_idx, len(lines)):
+        if "</xsl:template>" in lines[j]:
+            end = j
+            break
+    if end - start > 260:
+        start = max(0, line_idx - 30)
+        end = min(len(lines) - 1, line_idx + 30)
+    return start, end
+
+
+def _extract_real_candidate_blocks(
+    full_raw_xslt: str,
+    modification_request: str,
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """
+    Locate real candidate blocks in the full XSLT for this request.
+    Returns (blocks, error_message). On error, blocks is empty and no LLM call
+    should be made.
+    """
+    lines = full_raw_xslt.splitlines()
+    if not lines:
+        return [], "Could not extract XSLT source from disk."
+
+    terms = _extract_search_terms(modification_request)
+    if not terms:
+        return [], "Could not identify any concrete field/template terms to locate in the XSLT."
+
+    spans: List[Tuple[int, int, str]] = []
+    found_terms: set = set()
+    for term in terms:
+        pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])", re.IGNORECASE)
+        for idx, line in enumerate(lines):
+            if not pattern.search(line):
+                continue
+            if not any(k in line for k in ("xsl:value-of", "xsl:template", "select=", "name=", "match=", "$", "<", ">")):
+                continue
+            start, end = _find_template_bounds(lines, idx)
+            spans.append((start, end, term))
+            found_terms.add(term)
+            if len(spans) >= 12:
+                break
+        if len(spans) >= 12:
+            break
+
+    requested_hints = [h for h in _FIELD_HINTS if re.search(rf"\b{re.escape(h)}\b", modification_request, re.IGNORECASE)]
+    missing_hints = [h for h in requested_hints if h not in found_terms]
+    if missing_hints:
+        return [], f"Could not locate the real {missing_hints[0]} output block in the XSLT."
+
+    if not spans:
+        return [], "Could not locate a confident real block in the XSLT for this modification request."
+
+    deduped: List[Dict[str, Any]] = []
+    seen_ranges = set()
+    budget = 0
+    for start, end, term in sorted(spans, key=lambda s: (s[0], s[1])):
+        key = (start, end)
+        if key in seen_ranges:
+            continue
+        seen_ranges.add(key)
+        block = "\n".join(lines[start:end + 1]).rstrip()
+        if not block:
+            continue
+        budget += len(block)
+        if budget > _MAX_CANDIDATE_CONTEXT_CHARS and deduped:
+            break
+        deduped.append({
+            "term": term,
+            "start_line": start + 1,
+            "end_line": end + 1,
+            "text": block,
+        })
+        if len(deduped) >= 5:
+            break
+
+    if not deduped:
+        return [], "Could not locate a confident real block in the XSLT for this modification request."
+
+    return deduped, None
+
+
+def _build_modify_prompt(
+    *,
+    file_name: str,
+    file_type: str,
+    modification_request: str,
+    candidate_blocks: List[Dict[str, Any]],
+) -> str:
+    exact_anchors: List[str] = []
+    seen_anchors = set()
+    for blk in candidate_blocks:
+        for ln in blk["text"].splitlines():
+            s = ln.strip()
+            if "xsl:value-of" in s and s not in seen_anchors:
+                seen_anchors.add(s)
+                exact_anchors.append(ln)
+            if len(exact_anchors) >= 20:
+                break
+        if len(exact_anchors) >= 20:
+            break
+
+    chunks = []
+    for i, blk in enumerate(candidate_blocks, 1):
+        chunks.append(
+            f"### Candidate {i} (term: {blk['term']}, lines {blk['start_line']}-{blk['end_line']})\n"
+            f"```xml\n{blk['text']}\n```"
+        )
+    anchor_catalog = "\n".join(f"- `{a}`" for a in exact_anchors) if exact_anchors else "- (no single-line value-of anchors found)"
+    return (
+        f"## Mapping File\n"
+        f"Name: {file_name}  |  Type: {file_type}\n\n"
+        f"## Real candidate blocks from full XSLT on disk\n"
+        f"{chr(10).join(chunks)}\n\n"
+        f"## Exact anchor snippets (preferred BEFORE choices)\n"
+        f"{anchor_catalog}\n\n"
+        f"## Modification Request\n"
+        f"{modification_request.strip()}\n\n"
+        f"Hard rules:\n"
+        f"1) BEFORE must be copied character-for-character from the candidate blocks or anchor list.\n"
+        f"2) BEFORE must be the smallest exact replaceable snippet (single xsl:value-of line preferred).\n"
+        f"3) AFTER must preserve surrounding structure and only change the target expression.\n"
+        f"4) If you cannot provide an exact BEFORE, return the FAILURE format (no BEFORE/AFTER)."
+    )
 
 
 def apply_patch(
@@ -222,8 +577,7 @@ def apply_patch(
     Strategy
     --------
     1. Exact character-for-character match.
-    2. Normalised-whitespace sliding-window match (handles minor indent
-       differences between the LLM copy and the actual file).
+    2. No fuzzy fallback: patch anchors must be exact to prevent fake placeholders.
 
     Returns
     -------
@@ -240,48 +594,28 @@ def apply_patch(
     # Strategy 1: exact match
     if before_block in raw_xslt:
         patched = raw_xslt.replace(before_block, after_block, 1)
+        if patched == raw_xslt:
+            return raw_xslt, False, "Patch produced no real XSLT change."
         return patched, True, None
 
-    # Strategy 2: normalised-whitespace sliding-window
-    norm_before  = _normalize_ws(before_block)
-    before_lines = before_block.strip().splitlines()
-    window_size  = max(len(before_lines), 1)
-    file_lines   = raw_xslt.splitlines()
+    return raw_xslt, False, "Could not locate the exact BEFORE block in the real XSLT source."
 
-    for i in range(len(file_lines) - window_size + 1):
-        window = "\n".join(file_lines[i : i + window_size])
-        if _normalize_ws(window) == norm_before:
-            # Preserve the indentation level of the first matched line
-            leading_spaces = len(file_lines[i]) - len(file_lines[i].lstrip())
-            indent = " " * leading_spaces
 
-            # Re-indent the AFTER block to match the original indentation
-            after_lines = after_block.splitlines()
-            if after_lines:
-                first_stripped = after_lines[0].lstrip()
-                after_base = len(after_lines[0]) - len(first_stripped) if first_stripped else 0
-                reindented = []
-                for ln in after_lines:
-                    stripped = ln[after_base:] if len(ln) >= after_base and ln[:after_base] == " " * after_base else ln.lstrip()
-                    reindented.append((indent + stripped) if stripped else "")
-                after_reindented = "\n".join(reindented)
-            else:
-                after_reindented = after_block
+def _derive_action_from_request(modification_request: str) -> str:
+    req = (modification_request or "").lower()
+    if any(k in req for k in ("multiply", "calculate", "sum", "product")):
+        return "add_calculation"
+    if any(k in req for k in ("decimal", "format-number", "precision")):
+        return "change_format"
+    return "replace_value"
 
-            patched_lines = (
-                file_lines[:i]
-                + after_reindented.splitlines()
-                + file_lines[i + window_size :]
-            )
-            return "\n".join(patched_lines), True, None
 
-    return raw_xslt, False, (
-        "Could not locate the BEFORE block in the XSLT source. "
-        "The XSLT may be truncated in the prompt (only the first "
-        f"{_MAX_XSLT_CHARS} characters were sent to the LLM). "
-        "Copy the BEFORE block into your editor, locate it manually, "
-        "and apply the AFTER block there."
-    )
+def _extract_select_from_xml_snippet(snippet: str) -> str:
+    m = re.search(r'select\s*=\s*"([^"]+)"', snippet or "")
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"select\s*=\s*'([^']+)'", snippet or "")
+    return m.group(1).strip() if m else ""
 
 
 def validate_xslt_wellformed(xslt_text: str) -> Tuple[bool, Optional[str]]:
@@ -363,42 +697,51 @@ def modify(
             "Ensure the file is an XSLT or XML mapping and was parsed successfully."
         ), None
 
-    # Truncated copy for the LLM prompt (token budget)
-    truncated = len(full_raw_xslt) > _MAX_XSLT_CHARS
-    prompt_xslt = full_raw_xslt[:_MAX_XSLT_CHARS] if truncated else full_raw_xslt
-
-    # -- Build LLM user message ------------------------------------------------
-    truncation_note = (
-        f"\n\n> NOTE: Stylesheet truncated to first {_MAX_XSLT_CHARS} chars "
-        "for token budget. If the target block is beyond this point, note it "
-        "in EXPLANATION and I will apply the patch manually.\n"
-        if truncated else ""
+    # -- Locate element in real XSLT -------------------------------------------
+    location = locate_element_in_xslt(
+        xslt_content=full_raw_xslt,
+        user_field_description=modification_request,
+        rag_engine=None,
     )
+    if not location.get("found"):
+        msg = location.get("suggestion") or "Could not locate target element."
+        return f"[modify] {msg}", None
 
-    # Include XSLT structure hints from parsed_content so the LLM can reference
-    # real template names even when the full source is truncated
-    parsed_hints = ""
-    tcg = parsed.get("template_call_graph", [])
-    if tcg:
-        names = [t.get("name") or t.get("match", "") for t in tcg[:15]]
-        names = [n for n in names if n]
-        if names:
-            parsed_hints = (
-                "\n\n> TEMPLATE INVENTORY (from parsed structure): "
-                + ", ".join(names)
-                + "\n"
+    # Special-case calculation requests: ensure quantity and price anchors exist.
+    req_lower = modification_request.lower()
+    if any(k in req_lower for k in ("multiply", "quantity", "qty")) and "price" in req_lower:
+        qty_loc = locate_element_in_xslt(full_raw_xslt, "quantity", None)
+        price_loc = locate_element_in_xslt(full_raw_xslt, "price", None)
+        if not qty_loc.get("found") or not price_loc.get("found"):
+            return (
+                "[modify] Could not confidently locate both quantity and price fields for calculation.",
+                None,
             )
 
-    user_message = (
-        f"## Mapping File\n"
-        f"Name: {file_name}  |  Type: {file_type}\n"
-        f"{parsed_hints}"
-        f"\n## Current XSLT Source\n"
-        f"```xml\n{prompt_xslt}\n```"
-        f"{truncation_note}\n\n"
-        f"## Modification Request\n"
-        f"{modification_request.strip()}\n\n"
-        f"Please propose the minimal change to fulfil this request."
+    # Build candidate blocks from exact located context for precise prompting.
+    candidate_block = "\n".join(
+        [location.get("context_before", ""), location.get("context_after", "")]
+    ).strip()
+    if not candidate_block:
+        # fallback to line window extraction
+        lines = full_raw_xslt.splitlines()
+        ln = int(location.get("line_number", 1))
+        start = max(1, ln - 10)
+        end = min(len(lines), ln + 10)
+        candidate_block = "\n".join(lines[start - 1:end]).rstrip()
+    candidate_blocks = [{
+        "term": "located_element",
+        "start_line": max(1, int(location.get("line_number", 1)) - 10),
+        "end_line": int(location.get("line_number", 1)) + 10,
+        "text": candidate_block,
+    }]
+
+    # -- Build LLM user message ------------------------------------------------
+    user_message = _build_modify_prompt(
+        file_name=file_name,
+        file_type=file_type,
+        modification_request=modification_request,
+        candidate_blocks=candidate_blocks,
     )
 
     # -- Call LLM --------------------------------------------------------------
@@ -416,15 +759,46 @@ def modify(
 
     # -- Parse the proposed patch ----------------------------------------------
     patch = _parse_patch(llm_text)
+    if patch.get("failure"):
+        return f"[modify] {patch['failure']}\n\n{patch.get('explanation', '').strip()}".strip(), None
 
     patched_xslt   = None
     patch_applied  = False
     patch_error    = None
 
     if patch["before"] and patch["after"] is not None:
-        patched_xslt, patch_applied, patch_error = apply_patch(
-            full_raw_xslt, patch["before"], patch["after"]
-        )
+        candidate_texts = [blk["text"] for blk in candidate_blocks]
+        if patch["before"] not in full_raw_xslt or not any(patch["before"] in txt for txt in candidate_texts):
+            return (
+                "[modify] Rejected patch: BEFORE block is not an exact snippet from the real XSLT candidate blocks.",
+                None,
+            )
+        # DOM-first apply path (replaces fragile string-only patching).
+        try:
+            from lxml import etree  # noqa: PLC0415
+            parser = etree.XMLParser(remove_blank_text=False, recover=True)
+            tree = etree.fromstring(full_raw_xslt.encode("utf-8"), parser=parser)
+            target_xpath = location.get("xpath_location", "")
+            new_expression = _extract_select_from_xml_snippet(patch["after"])
+            if target_xpath and new_expression:
+                spec = {
+                    "action": _derive_action_from_request(modification_request),
+                    "target_xpath": target_xpath,
+                    "new_expression": new_expression,
+                    "format": "0.000",
+                }
+                new_tree = apply_modification_via_dom(tree, spec)
+                patched_xslt = etree.tostring(new_tree, encoding="unicode")
+                patch_applied = patched_xslt != full_raw_xslt
+                patch_error = None if patch_applied else "Patch produced no real XSLT change."
+            else:
+                patched_xslt, patch_applied, patch_error = apply_patch(
+                    full_raw_xslt, patch["before"], patch["after"]
+                )
+        except Exception:
+            patched_xslt, patch_applied, patch_error = apply_patch(
+                full_raw_xslt, patch["before"], patch["after"]
+            )
         if patch_applied:
             is_valid, validation_error = validate_xslt_wellformed(patched_xslt)
             if not is_valid:
@@ -443,7 +817,7 @@ def modify(
         status_note = (
             f"\n\n---\n"
             f"**Auto-apply note:** {patch_error}  \n"
-            "Use the BEFORE/AFTER blocks above to apply the change manually in your editor."
+            "No revised file was saved because the patch could not be confidently applied."
         )
     else:
         # No BEFORE/AFTER produced (e.g. LLM said no change needed)

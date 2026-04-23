@@ -45,6 +45,7 @@ Usage (standalone test):
 import os
 import re
 import time
+import difflib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
@@ -132,6 +133,28 @@ _WORD_PATTERN: re.Pattern = re.compile(
     re.IGNORECASE,
 )
 
+_MODIFY_PATTERNS: tuple[str, ...] = (
+    r"change.*date.*format",
+    r"format.*date",
+    r"convert.*date",
+    r"(yyyy|mm|dd|yy)",
+    r"move.*decimal",
+    r"decimal.*place",
+    r"format.*price",
+    r"format.*number",
+    r"\d+\s*decimal",
+    r"multiply.*by",
+    r"multiply.*with",
+    r"add.*to",
+    r"subtract.*from",
+    r"calculate",
+    r"change.*to",
+    r"update.*to",
+    r"replace.*with",
+    r"modify",
+    r"set.*to",
+)
+
 
 def _is_in_scope(user_message: str) -> bool:
     """
@@ -150,11 +173,151 @@ def _is_in_scope(user_message: str) -> bool:
     return False
 
 
+def _classify_action(user_message: str) -> str:
+    """
+    Greedy action classifier.
+    Critical rule: evaluate modify patterns before out-of-scope rejection.
+    """
+    msg_lower = (user_message or "").lower()
+
+    for pattern in _MODIFY_PATTERNS:
+        if re.search(pattern, msg_lower):
+            return "modify"
+
+    if any(word in msg_lower for word in ["simulate", "run", "test", "transform", "execute"]):
+        return "simulate"
+    if any(word in msg_lower for word in ["explain", "what does", "how does", "describe", "show me"]):
+        return "explain"
+    if any(word in msg_lower for word in ["generate", "create", "build", "make a new"]):
+        return "generate"
+    if "compar" in msg_lower and ("xslt" in msg_lower or "version" in msg_lower or "old" in msg_lower):
+        return "compare"
+    return "out_of_scope"
+
+
+def _build_explain_prompt_with_roles(
+    user_message: str,
+    source_ingested: Optional[dict],
+    target_ingested: Optional[dict],
+) -> str:
+    """
+    Build explain prompt so XSLT explanation is grounded in source→target context.
+    """
+    src_name = (source_ingested or {}).get("metadata", {}).get("filename", "")
+    tgt_name = (target_ingested or {}).get("metadata", {}).get("filename", "")
+    if src_name or tgt_name:
+        return (
+            f"{user_message}\n\n"
+            f"[EXPLAIN CONTEXT]\n"
+            f"Explain the active XSLT in context of transforming source "
+            f"`{src_name or '(not selected)'}` toward target "
+            f"`{tgt_name or '(not selected)'}`.\n"
+            f"Highlight key segment paths (ISA, GS, ST, BIG/REF/N1/IT1/CTT/SE) where possible."
+        )
+    return user_message
+
+
+def _is_compare_xslt_request(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    return (
+        ("compare" in lower and "xslt" in lower)
+        or ("side by side" in lower and "xslt" in lower)
+        or ("comparison" in lower and "mapping" in lower)
+    )
+
+
+def _extract_xslt_compare_facts(ingested: dict) -> Dict[str, Any]:
+    parsed = (ingested or {}).get("parsed_content", {}) or {}
+    meta = (ingested or {}).get("metadata", {}) or {}
+    tcg = parsed.get("template_call_graph", []) or []
+    output_elements: List[str] = []
+    value_of: List[str] = []
+    hardcoded = parsed.get("hardcoded_values", []) or []
+    for t in tcg:
+        for el in (t.get("output_elements") or []):
+            if el not in output_elements:
+                output_elements.append(el)
+        for xp in (t.get("value_of") or []):
+            if xp not in value_of:
+                value_of.append(xp)
+    return {
+        "filename": meta.get("filename", ""),
+        "templates": len(tcg),
+        "segments": output_elements,
+        "xpaths": value_of,
+        "hardcoded_count": len(hardcoded),
+        "raw_xml": parsed.get("raw_xml") or "",
+    }
+
+
+def _compare_two_xslts(old_ing: dict, new_ing: dict) -> Dict[str, Any]:
+    oldf = _extract_xslt_compare_facts(old_ing)
+    newf = _extract_xslt_compare_facts(new_ing)
+
+    old_seg = set(oldf["segments"])
+    new_seg = set(newf["segments"])
+    missing_in_new = sorted(old_seg - new_seg)
+    added_in_new = sorted(new_seg - old_seg)
+
+    old_xp = set(oldf["xpaths"])
+    new_xp = set(newf["xpaths"])
+    mapping_divergence = sorted((old_xp ^ new_xp))[:40]
+
+    old_lines = (oldf.get("raw_xml") or "").splitlines()
+    new_lines = (newf.get("raw_xml") or "").splitlines()
+    diff = list(difflib.unified_diff(old_lines, new_lines, fromfile="old", tofile="new", lineterm=""))
+    changed_lines = sum(1 for ln in diff if (ln.startswith("+") and not ln.startswith("+++")) or (ln.startswith("-") and not ln.startswith("---")))
+
+    risk_points = 0
+    risk_notes: List[str] = []
+    if missing_in_new:
+        risk_points += 2
+        risk_notes.append(f"Missing segments in revised XSLT: {', '.join(missing_in_new[:10])}")
+    if len(mapping_divergence) > 20:
+        risk_points += 1
+        risk_notes.append("Large field-mapping divergence between versions.")
+    if newf["hardcoded_count"] > oldf["hardcoded_count"]:
+        risk_points += 1
+        risk_notes.append("Revised XSLT introduced additional hardcoded values.")
+    risk_level = "low" if risk_points == 0 else ("medium" if risk_points <= 2 else "high")
+
+    summary = (
+        f"Compared `{oldf['filename']}` vs `{newf['filename']}`: "
+        f"{changed_lines} changed line(s), {len(added_in_new)} segment(s) added, "
+        f"{len(missing_in_new)} segment(s) removed, {len(mapping_divergence)} mapping divergence point(s)."
+    )
+
+    text = (
+        "## XSLT Comparison\n"
+        + summary
+        + f"\nRisk assessment: **{risk_level}**."
+    )
+    if risk_notes:
+        text += "\n" + "\n".join(f"- {n}" for n in risk_notes)
+
+    return {
+        "text": text,
+        "summary": summary,
+        "risk_level": risk_level,
+        "missing_segments_in_revised": missing_in_new,
+        "added_segments_in_revised": added_in_new,
+        "mapping_divergence": mapping_divergence,
+        "changed_lines": changed_lines,
+        "old_file": oldf["filename"],
+        "new_file": newf["filename"],
+        "diff_preview": "\n".join(diff[:240]),
+    }
+
+
 def dispatch(
     user_message: str,
     file_path: Optional[str] = None,
     file_paths: Optional[List[str]] = None,
     source_file: Optional[str] = None,
+    target_file: Optional[str] = None,
+    active_xslt_file: Optional[str] = None,
+    active_source_file: Optional[str] = None,
+    active_target_file: Optional[str] = None,
     ingested: Optional[dict] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
@@ -172,6 +335,7 @@ def dispatch(
                       All files are added to session.ingested_files. The most
                       recently ingested one becomes the primary for this turn.
         source_file:  Path to the source/input data file for simulate intent.
+        target_file:  Optional path to expected target/output contract file.
         ingested:     Pre-parsed dict from ingest_file(). If provided,
                       file_path and file_paths are ignored.
         api_key:      Groq API key. Falls back to GROQ_API_KEY env var.
@@ -205,11 +369,14 @@ def dispatch(
     _t0 = time.time()
     _actor = getattr(session, "session_id", None) if session is not None else None
     _actor = str(_actor) if _actor else "system"
+    forced_action = _classify_action(user_message)
+    print(f"[DEBUG] User message: {user_message}")
+    print(f"[DEBUG] Classified action: {forced_action}")
     try:
         from .intent_router import route
         from .file_ingestion import ingest_file
         from .groq_agent import explain
-        from .simulation_engine import simulate
+        from .simulation_engine import simulate, compare_output_to_target, generate_autofix_suggestions
         from .modification_engine import modify
         from .xslt_generator import generate
         from .audit_engine import audit
@@ -218,7 +385,7 @@ def dispatch(
         from intent_router import route          # fallback for standalone execution
         from file_ingestion import ingest_file
         from groq_agent import explain
-        from simulation_engine import simulate
+        from simulation_engine import simulate, compare_output_to_target, generate_autofix_suggestions
         from modification_engine import modify
         from xslt_generator import generate
         from audit_engine import audit           # type: ignore
@@ -240,9 +407,40 @@ def dispatch(
                 session.add_file(_new)
             ingested = _new   # last ingested = primary for this turn
 
-    # Fall back to session's most-relevant file when no new files uploaded
-    if ingested is None and session is not None:
-        ingested = session.get_primary_ingested(user_message)
+    # Resolve explicit role paths from caller/session.
+    resolved_xslt_path = active_xslt_file or (session.get_role_file("xslt") if session else None)
+    resolved_source_path = active_source_file or source_file or (session.get_role_file("source") if session else None)
+    resolved_target_path = active_target_file or target_file or (session.get_role_file("target") if session else None)
+
+    # Keep session role paths synced when caller provides explicit values.
+    if session is not None:
+        if active_xslt_file is not None:
+            session.set_role_file("xslt", active_xslt_file)
+        if (active_source_file is not None) or (source_file is not None):
+            session.set_role_file("source", active_source_file or source_file)
+        if (active_target_file is not None) or (target_file is not None):
+            session.set_role_file("target", active_target_file or target_file)
+        # Refresh resolved paths from session in case they were just updated.
+        resolved_xslt_path = session.get_role_file("xslt")
+        resolved_source_path = session.get_role_file("source")
+        resolved_target_path = session.get_role_file("target")
+
+    # Find role ingested dicts from session.
+    xslt_ingested = None
+    source_ingested = None
+    target_ingested = None
+    if session is not None:
+        xslt_ingested = session.get_ingested_by_source_path(resolved_xslt_path)
+        source_ingested = session.get_ingested_by_source_path(resolved_source_path)
+        target_ingested = session.get_ingested_by_source_path(resolved_target_path)
+
+    # Backward compatibility fallback for older callers with ingested/file_path.
+    if xslt_ingested is None:
+        xslt_ingested = ingested
+    if xslt_ingested is None and session is not None:
+        xslt_ingested = session.get_primary_ingested(user_message)
+    if ingested is None:
+        ingested = xslt_ingested
 
     # ── 2. Build context prefix from session history ──────────────────────────
     _ctx_prefix = ""
@@ -274,7 +472,7 @@ def dispatch(
     # Reject questions clearly outside the EDI/XSLT domain before routing.
     # Skip the check if a file was just uploaded (the upload itself is in-scope).
     _has_new_files = bool(_all_new_paths) or (ingested is not None and not session)
-    if not _has_new_files and not _is_in_scope(user_message):
+    if forced_action == "out_of_scope" and not _has_new_files and not _is_in_scope(user_message):
         _audit_log_event(
             actor=_actor,
             action="dispatch",
@@ -299,7 +497,101 @@ def dispatch(
         }
 
     # ── 5. Classify user intent ───────────────────────────────────────────────
-    route_result = route(user_message, api_key=api_key)
+    # Direct compare mode for side-by-side XSLT comparison.
+    if _is_compare_xslt_request(user_message) and session is not None:
+        if len(session.xslt_revisions) >= 2:
+            rev_old = session.xslt_revisions[0]
+            rev_new = session.xslt_revisions[-1]
+            rev_comp = session.compare_revisions(rev_old.id, rev_new.id)
+            comp_text = (
+                "## XSLT Revision Comparison\n"
+                f"{rev_comp.get('summary', '')}\n"
+                f"Original: `{rev_old.timestamp}` | Latest: `{rev_new.timestamp}`"
+            )
+            return {
+                "route": {"scores": {}, "active_intents": ["compare"], "primary": "compare", "is_multi": False, "threshold_used": 0.45},
+                "responses": {"compare": comp_text},
+                "primary_response": comp_text,
+                "agent": None,
+                "ingested": xslt_ingested,
+                "audit_dict": None,
+                "patched_xslt": None,
+                "generated_xslt": None,
+                "updated_xslt": None,
+                "change_summary": "",
+                "comparison_data": None,
+                "latest_version_path": "",
+                "test_readiness_status": "",
+                "simulate_output": None,
+                "modify_file_used": (xslt_ingested or {}).get("metadata", {}).get("filename", ""),
+                "source_file_used": (source_ingested or {}).get("metadata", {}).get("filename", ""),
+                "target_file_used": (target_ingested or {}).get("metadata", {}).get("filename", ""),
+                "target_match_status": "no_target",
+                "target_match_summary": "",
+                "missing_target_segments": [],
+                "extra_output_segments": [],
+                "mismatched_fields": [],
+                "xslt_compare_data": {
+                    "risk_level": "info",
+                    "diff_preview": "\n".join(rev_comp.get("diff_lines", [])[:240]),
+                    "added_segments_in_revised": [],
+                    "missing_segments_in_revised": [],
+                    "mapping_divergence": [],
+                },
+                "session": session,
+                "primary_file_name": (xslt_ingested or {}).get("metadata", {}).get("filename", ""),
+            }
+        xslt_files = [
+            f for f in session.ingested_files
+            if f.get("metadata", {}).get("file_type") == "XSLT"
+        ]
+        if len(xslt_files) >= 2:
+            comp = _compare_two_xslts(xslt_files[-2], xslt_files[-1])
+            return {
+                "route": {"scores": {}, "active_intents": ["compare"], "primary": "compare", "is_multi": False, "threshold_used": 0.45},
+                "responses": {"compare": comp["text"]},
+                "primary_response": comp["text"],
+                "agent": None,
+                "ingested": xslt_files[-1],
+                "audit_dict": None,
+                "patched_xslt": None,
+                "generated_xslt": None,
+                "updated_xslt": None,
+                "change_summary": "",
+                "comparison_data": None,
+                "latest_version_path": "",
+                "test_readiness_status": "",
+                "simulate_output": None,
+                "modify_file_used": xslt_files[-1].get("metadata", {}).get("filename", ""),
+                "source_file_used": (source_ingested or {}).get("metadata", {}).get("filename", ""),
+                "target_file_used": (target_ingested or {}).get("metadata", {}).get("filename", ""),
+                "target_match_status": "no_target",
+                "target_match_summary": "",
+                "missing_target_segments": [],
+                "extra_output_segments": [],
+                "mismatched_fields": [],
+                "xslt_compare_data": comp,
+                "session": session,
+                "primary_file_name": xslt_files[-1].get("metadata", {}).get("filename", ""),
+            }
+
+    if forced_action in {"modify", "simulate", "explain", "generate"}:
+        route_result = {
+            "scores": {
+                "explain": 1.0 if forced_action == "explain" else 0.0,
+                "generate": 1.0 if forced_action == "generate" else 0.0,
+                "modify": 1.0 if forced_action == "modify" else 0.0,
+                "simulate": 1.0 if forced_action == "simulate" else 0.0,
+                "audit": 0.0,
+            },
+            "reasoning": {"forced": "pattern classifier"},
+            "active_intents": [forced_action],
+            "primary": forced_action,
+            "is_multi": False,
+            "threshold_used": 0.45,
+        }
+    else:
+        route_result = route(user_message, api_key=api_key)
 
     # ── 6. Dispatch to each active engine in priority order ───────────────────
     responses: Dict[str, str] = {}
@@ -313,6 +605,15 @@ def dispatch(
     comparison_data: Optional[Dict[str, Any]] = None
     latest_version_path: str = ""
     test_readiness_status: str = "no revised XSLT available"
+    modify_file_used: str = (xslt_ingested or {}).get("metadata", {}).get("filename", "")
+    source_file_used: str = (source_ingested or {}).get("metadata", {}).get("filename", "")
+    target_file_used: str = (target_ingested or {}).get("metadata", {}).get("filename", "")
+    target_match_status: str = "no_target"
+    target_match_summary: str = "No target file selected for comparison."
+    missing_target_segments: List[str] = []
+    extra_output_segments: List[str] = []
+    mismatched_fields: List[Dict[str, Any]] = []
+    autofix_suggestions: List[Dict[str, Any]] = []
 
     # Re-use the existing FileAgent from session if explain was run before,
     # so the full conversation history inside the agent is preserved.
@@ -322,73 +623,124 @@ def dispatch(
     for intent in route_result["active_intents"]:
 
         if intent == "explain":
-            if ingested is None:
+            if xslt_ingested is None:
                 responses[intent] = (
-                    "[explain] No file provided. "
-                    "Pass a file_path or ingested dict so the agent has something to explain."
+                    "[explain] No active XSLT file selected."
                 )
             elif agent is not None:
                 # Session already has a live FileAgent — continue that conversation
-                response = agent.chat(user_message)
+                response = agent.chat(
+                    _build_explain_prompt_with_roles(
+                        user_message=user_message,
+                        source_ingested=source_ingested,
+                        target_ingested=target_ingested,
+                    )
+                )
                 responses[intent] = response
             else:
                 response, agent = explain(
-                    ingested,
-                    question=user_message,
+                    xslt_ingested,
+                    question=_build_explain_prompt_with_roles(
+                        user_message=user_message,
+                        source_ingested=source_ingested,
+                        target_ingested=target_ingested,
+                    ),
                     api_key=api_key,
                     model=resolved_model,
                 )
                 responses[intent] = response
+            modify_file_used = (xslt_ingested or {}).get("metadata", {}).get("filename", "")
 
         elif intent == "simulate":
-            if ingested is None:
+            if xslt_ingested is None:
                 responses[intent] = (
-                    "[simulate] No mapping file provided. "
-                    "Pass file_path pointing to an XSLT/mapping file."
+                    "[simulate] No active XSLT file selected for simulation."
                 )
             else:
                 msg = _ctx_prefix + user_message
 
-                # ── Auto-resolve source_file from session ──────────────────────
-                # app.py never passes source_file= explicitly.  When a non-XSLT
-                # file (D365_XML, X12_EDI, X12_XML, etc.) is in the session we
-                # pull its stored disk path so Saxon can execute the real XSLT.
-                resolved_source = source_file
-                if resolved_source is None and session is not None:
-                    _source_types = {"D365_XML", "X12_EDI", "X12_XML",
-                                     "EDIFACT", "XSD", "XML"}
-                    for _f in reversed(session.ingested_files):
-                        _ftype = _f.get("metadata", {}).get("file_type", "")
-                        _fpath = _f.get("metadata", {}).get("source_path", "")
-                        if _ftype in _source_types and _fpath and Path(_fpath).exists():
-                            resolved_source = _fpath
-                            break
+                resolved_source = resolved_source_path
+                if not resolved_source or not Path(resolved_source).exists():
+                    responses[intent] = (
+                        "[simulate] No active source file selected for simulation."
+                    )
+                    continue
+
+                simulate_ingested = xslt_ingested
+                revision_used = ""
+                if session is not None:
+                    latest_rev = session.get_latest_xslt()
+                    if latest_rev is not None:
+                        try:
+                            _uploads = Path(__file__).resolve().parent.parent / "data" / "uploads"
+                            _uploads.mkdir(parents=True, exist_ok=True)
+                            _sid = getattr(session, "session_id", "session")
+                            _rev_path = _uploads / f"{_sid}_latest_revision.xml"
+                            _rev_path.write_text(latest_rev.content, encoding="utf-8")
+                            simulate_ingested = ingest_file(file_path=str(_rev_path))
+                            revision_used = f"Using revision {len(session.xslt_revisions)} ({latest_rev.timestamp})"
+                        except Exception:
+                            simulate_ingested = xslt_ingested
 
                 response, simulate_output = simulate(
-                    ingested,
+                    simulate_ingested,
                     source_file=resolved_source,
                     api_key=api_key,
                     model=resolved_model,
                 )
-                responses[intent] = response
+                target_text = None
+                if target_ingested is not None:
+                    target_parsed = target_ingested.get("parsed_content", {})
+                    target_text = target_parsed.get("raw_xml") or target_parsed.get("raw_text")
+                    target_file_used = target_ingested.get("metadata", {}).get("filename", "")
+                comparison = compare_output_to_target(simulate_output, target_text)
+                target_match_status = comparison.get("target_match_status", "no_target")
+                target_match_summary = comparison.get("target_match_summary", "")
+                missing_target_segments = comparison.get("missing_target_segments", [])
+                extra_output_segments = comparison.get("extra_output_segments", [])
+                mismatched_fields = comparison.get("mismatched_fields", [])
+                raw_xslt_for_fix = (simulate_ingested.get("parsed_content") or {}).get("raw_xml") or ""
+                autofix_suggestions = generate_autofix_suggestions(comparison, raw_xslt_for_fix)
+
+                match_line = ""
+                if target_match_status == "matches_target":
+                    match_line = "\n\n## Target Comparison\nStatus: **matches the target**\n"
+                elif target_match_status == "partial_match":
+                    match_line = "\n\n## Target Comparison\nStatus: **partially matches the target**\n"
+                elif target_match_status == "does_not_match":
+                    match_line = "\n\n## Target Comparison\nStatus: **does not match the target**\n"
+                elif target_match_status == "no_output":
+                    match_line = "\n\n## Target Comparison\nStatus: **comparison unavailable (no real output)**\n"
+                else:
+                    match_line = "\n\n## Target Comparison\nStatus: **no target file selected**\n"
+                match_line += f"{target_match_summary}\n"
+                if revision_used:
+                    response = f"{response}\n\n---\n{revision_used}"
+                responses[intent] = response + match_line
+                source_file_used = Path(resolved_source).name
+                modify_file_used = (simulate_ingested or {}).get("metadata", {}).get("filename", "")
 
         elif intent == "modify":
-            if ingested is None:
+            if xslt_ingested is None:
                 responses[intent] = (
-                    "[modify] No mapping file provided. "
-                    "Pass file_path pointing to an XSLT/mapping file to modify."
+                    "[modify] No active XSLT file selected for modification."
                 )
             else:
                 msg = _ctx_prefix + user_message
                 # FIX: capture patched_xslt (second return value) — was wrongly
                 # discarded as `_mod_agent` in earlier versions.
                 response, patched_xslt = modify(
-                    ingested,
+                    xslt_ingested,
                     modification_request=msg,
                     api_key=api_key,
                     model=resolved_model,
                 )
-                updated_xslt = patched_xslt
+                modify_file_used = (xslt_ingested or {}).get("metadata", {}).get("filename", "")
+                if source_ingested is not None:
+                    source_file_used = source_ingested.get("metadata", {}).get("filename", "")
+                if target_ingested is not None:
+                    target_file_used = target_ingested.get("metadata", {}).get("filename", "")
+                updated_xslt = None
                 try:
                     from .modification_engine import _parse_patch
                     from .xslt_revision_store import XsltRevisionStore, build_comparison
@@ -396,41 +748,49 @@ def dispatch(
                     patch = _parse_patch(response)
                     change_summary = patch.get("summary", "")
 
-                    full_raw_xslt = (ingested.get("parsed_content") or {}).get("raw_xml") or ""
+                    full_raw_xslt = (xslt_ingested.get("parsed_content") or {}).get("raw_xml") or ""
                     if patched_xslt and full_raw_xslt:
-                        comparison_data = build_comparison(full_raw_xslt, patched_xslt)
-
-                        meta = ingested.get("metadata", {})
-                        source_path_for_revision = meta.get("source_path") or ""
-                        file_name_for_revision = meta.get("filename", "mapping.xml")
-
-                        if source_path_for_revision and Path(source_path_for_revision).exists():
-                            store = XsltRevisionStore(
-                                Path(__file__).resolve().parent.parent / "data" / "revisions"
-                            )
-                            rev = store.save_revision(
-                                source_path=source_path_for_revision,
-                                filename=file_name_for_revision,
-                                xslt_text=patched_xslt,
-                                change_summary=change_summary or "Updated XSLT revision",
-                            )
-                            latest_version_path = rev.latest_version_path
-
-                            sample_source_available = False
-                            if session is not None:
-                                for _f in reversed(session.ingested_files):
-                                    _ftype = _f.get("metadata", {}).get("file_type", "")
-                                    _fpath = _f.get("metadata", {}).get("source_path", "")
-                                    if _ftype != "XSLT" and _fpath and Path(_fpath).exists():
-                                        sample_source_available = True
-                                        break
-                            test_readiness_status = (
-                                "ready" if sample_source_available else "ready when sample XML is available"
-                            )
+                        if patched_xslt == full_raw_xslt:
+                            test_readiness_status = "modify produced no real change; no revised XSLT was saved"
                         else:
-                            test_readiness_status = (
-                                "revised XSLT generated, but original source path was unavailable"
-                            )
+                            meta = xslt_ingested.get("metadata", {})
+                            source_path_for_revision = meta.get("source_path") or ""
+                            file_name_for_revision = meta.get("filename", "mapping.xml")
+
+                            if source_path_for_revision and Path(source_path_for_revision).exists():
+                                store = XsltRevisionStore(
+                                    Path(__file__).resolve().parent.parent / "data" / "revisions"
+                                )
+                                rev = store.save_revision(
+                                    source_path=source_path_for_revision,
+                                    filename=file_name_for_revision,
+                                    xslt_text=patched_xslt,
+                                    change_summary=change_summary or "Updated XSLT revision",
+                                )
+                                if session is not None:
+                                    session.save_xslt_revision(
+                                        content=patched_xslt,
+                                        description=change_summary or msg,
+                                    )
+                                latest_version_path = rev.latest_version_path
+                                updated_xslt = patched_xslt
+                                comparison_data = build_comparison(full_raw_xslt, patched_xslt)
+
+                                sample_source_available = False
+                                if session is not None:
+                                    for _f in reversed(session.ingested_files):
+                                        _ftype = _f.get("metadata", {}).get("file_type", "")
+                                        _fpath = _f.get("metadata", {}).get("source_path", "")
+                                        if _ftype != "XSLT" and _fpath and Path(_fpath).exists():
+                                            sample_source_available = True
+                                            break
+                                test_readiness_status = (
+                                    "ready" if sample_source_available else "ready when sample XML is available"
+                                )
+                            else:
+                                test_readiness_status = (
+                                    "revised XSLT generated, but original source path was unavailable"
+                                )
                     elif patched_xslt:
                         test_readiness_status = (
                             "revised XSLT generated, but no original XSLT was available for comparison"
@@ -440,7 +800,7 @@ def dispatch(
                 responses[intent] = response
                 # Auto-audit: append audit findings to the proposed modification
                 _audit_resp, _ = audit(
-                    ingested,
+                    xslt_ingested,
                     context=response,
                     api_key=api_key,
                     model=resolved_model,
@@ -475,9 +835,9 @@ def dispatch(
                 except Exception:
                     pass   # non-fatal — caller can still download the XSLT
             # Auto-audit: append audit findings to the generated XSLT
-            if ingested is not None:
+            if xslt_ingested is not None:
                 _audit_resp, _ = audit(
-                    ingested,
+                    xslt_ingested,
                     context=response,
                     api_key=api_key,
                     model=resolved_model,
@@ -485,18 +845,18 @@ def dispatch(
                 responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
 
         elif intent == "audit":
-            if ingested is None:
+            if xslt_ingested is None:
                 responses[intent] = (
-                    "[audit] No mapping file provided. "
-                    "Pass file_path pointing to an XSLT/mapping file to audit."
+                    "[audit] No active XSLT file selected."
                 )
             else:
                 response, audit_dict = audit(
-                    ingested,
+                    xslt_ingested,
                     api_key=api_key,
                     model=resolved_model,
                 )
                 responses[intent] = response
+                modify_file_used = (xslt_ingested or {}).get("metadata", {}).get("filename", "")
 
     primary = route_result["primary"]
     primary_response = responses.get(primary, "")
@@ -506,14 +866,15 @@ def dispatch(
         # ingested is already registered via session.add_file() above for new
         # files; only update the primary alias here for files loaded via the
         # legacy ingested= kwarg path (which bypasses add_file).
-        if ingested is not None and ingested not in session.ingested_files:
-            session.add_file(ingested)
+        if xslt_ingested is not None and xslt_ingested not in session.ingested_files:
+            session.add_file(xslt_ingested)
+        session.ingested = xslt_ingested or session.ingested
         if agent is not None:
             session.agent = agent
         session.add_turn(primary, user_message, primary_response)
 
     _primary_file_name = (
-        ingested.get("metadata", {}).get("filename", "") if ingested else ""
+        (xslt_ingested or {}).get("metadata", {}).get("filename", "")
     )
 
     result = {
@@ -521,7 +882,7 @@ def dispatch(
         "responses":          responses,
         "primary_response":   primary_response,
         "agent":              agent,
-        "ingested":           ingested,
+        "ingested":           xslt_ingested,
         "audit_dict":         audit_dict,
         "patched_xslt":       patched_xslt,
         "generated_xslt":     generated_xslt,
@@ -531,6 +892,16 @@ def dispatch(
         "latest_version_path": latest_version_path,
         "test_readiness_status": test_readiness_status,
         "simulate_output":    simulate_output,
+        "modify_file_used":   modify_file_used or _primary_file_name,
+        "source_file_used":   source_file_used or (source_ingested or {}).get("metadata", {}).get("filename", ""),
+        "target_file_used":   target_file_used or (target_ingested or {}).get("metadata", {}).get("filename", ""),
+        "target_match_status": target_match_status,
+        "target_match_summary": target_match_summary,
+        "missing_target_segments": missing_target_segments,
+        "extra_output_segments": extra_output_segments,
+        "mismatched_fields": mismatched_fields,
+        "autofix_suggestions": autofix_suggestions,
+        "xslt_compare_data": None,
         "session":            session,
         "primary_file_name":  _primary_file_name,
     }

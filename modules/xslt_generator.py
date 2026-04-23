@@ -121,6 +121,35 @@ outside the fence. Nothing else — no preamble, no extra commentary.
 """
 
 
+def _validate_generated_xslt(xslt_text: str) -> tuple[bool, str]:
+    """
+    Validate generated XSLT:
+    1) well-formed XML
+    2) Saxon compile check when saxonche is available
+    """
+    try:
+        from lxml import etree  # noqa: PLC0415
+        etree.fromstring(xslt_text.encode("utf-8"))
+    except Exception as exc:
+        return False, f"XML parse validation failed: {exc}"
+
+    try:
+        from saxonche import PySaxonProcessor  # type: ignore # noqa: PLC0415
+        with PySaxonProcessor(license=False) as proc:
+            xslt30 = proc.new_xslt30_processor()
+            _ = xslt30.compile_stylesheet(stylesheet_text=xslt_text)
+            if xslt30.exception_occurred:
+                err = xslt30.error_message or "Unknown Saxon compile error"
+                xslt30.clear_exception()
+                return False, f"Saxon compile validation failed: {err}"
+    except ImportError:
+        # Environment may not have saxonche; keep XML-valid output but report note.
+        return True, "XML valid; Saxon compile skipped (saxonche not installed)."
+    except Exception as exc:
+        return False, f"Saxon compile validation failed: {exc}"
+    return True, "XML + Saxon compile validation passed."
+
+
 def generate(
     generation_request: str,
     source_sample: Optional[str] = None,
@@ -220,6 +249,17 @@ def generate(
     m = re.search(r"```xml\s*([\s\S]*?)```", llm_text)
     if m:
         raw_xslt = m.group(1).strip()
+
+    if raw_xslt:
+        valid, note = _validate_generated_xslt(raw_xslt)
+        if not valid:
+            return (
+                llm_text
+                + "\n\n---\n"
+                + f"**Generation validation failed:** {note}\n"
+                + "Please refine the request and regenerate."
+            ), None
+        llm_text += "\n\n---\n" + f"**Generation validation:** {note}"
 
     return llm_text, raw_xslt
 

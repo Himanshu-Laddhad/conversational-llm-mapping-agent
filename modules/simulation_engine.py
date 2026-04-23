@@ -48,7 +48,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Dict, List
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -89,6 +89,9 @@ _ALTOVA_FN_USER_PATTERN: re.Pattern = re.compile(
     re.IGNORECASE,
 )
 
+_KEY_SEGMENTS = ["ISA", "GS", "ST", "BIG", "REF", "N1", "IT1", "CTT", "SE"]
+_KEY_FIELDS = ["ISA06", "ISA08", "GS02", "GS03", "ST01", "BIG01", "BIG02", "REF01", "REF02", "N101", "IT102", "IT104", "CTT01", "SE01"]
+
 _SYSTEM_PROMPT = """\
 You are an expert EDI/XSLT transformation analyst working with Altova MapForce \
 XSLT 2.0 stylesheets that transform D365 XML into X12 EDI XML.
@@ -115,6 +118,182 @@ analysis that shows:
 
 Be concise but complete. Use a structured format with clear section headers.
 """
+
+
+def _as_xml_root(xml_text: str):
+    try:
+        from lxml import etree  # noqa: PLC0415
+        return etree.fromstring(xml_text.encode("utf-8", errors="replace"))
+    except Exception:
+        return None
+
+
+def _collect_segment_presence(xml_text: str) -> Dict[str, bool]:
+    root = _as_xml_root(xml_text)
+    if root is None:
+        upper = xml_text.upper()
+        return {seg: (f"<{seg}" in upper or f"{seg}*" in upper) for seg in _KEY_SEGMENTS}
+    from lxml import etree  # noqa: PLC0415
+    present = {seg: False for seg in _KEY_SEGMENTS}
+    for elem in root.iter():
+        local = etree.QName(elem).localname if isinstance(elem.tag, str) else ""
+        if local in present:
+            present[local] = True
+    return present
+
+
+def _collect_field_values(xml_text: str, fields: List[str]) -> Dict[str, List[str]]:
+    root = _as_xml_root(xml_text)
+    if root is None:
+        values: Dict[str, List[str]] = {f: [] for f in fields}
+        for f in fields:
+            # lightweight fallback for flat EDI-like text
+            m = re.findall(rf"\b{re.escape(f)}\*([^\r\n\*~]+)", xml_text, flags=re.IGNORECASE)
+            values[f] = [v.strip() for v in m if v and v.strip()][:5]
+        return values
+    from lxml import etree  # noqa: PLC0415
+    values: Dict[str, List[str]] = {f: [] for f in fields}
+    for elem in root.iter():
+        if not isinstance(elem.tag, str):
+            continue
+        local = etree.QName(elem).localname
+        if local in values:
+            txt = (elem.text or "").strip()
+            if txt:
+                values[local].append(txt)
+    return values
+
+
+def compare_output_to_target(
+    output_xml: Optional[str],
+    target_text: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Compare actual transform output against target contract/sample output.
+    Returns structured comparison fields for UI and API callers.
+    """
+    result: Dict[str, Any] = {
+        "target_match_status": "no_target",
+        "target_match_summary": "No target file selected for comparison.",
+        "missing_target_segments": [],
+        "extra_output_segments": [],
+        "mismatched_fields": [],
+    }
+    if not target_text:
+        return result
+    if not output_xml:
+        result["target_match_status"] = "no_output"
+        result["target_match_summary"] = "No real transform output available to compare against target."
+        return result
+
+    out_presence = _collect_segment_presence(output_xml)
+    tgt_presence = _collect_segment_presence(target_text)
+
+    missing = [s for s in _KEY_SEGMENTS if tgt_presence.get(s) and not out_presence.get(s)]
+    extra = [s for s in _KEY_SEGMENTS if out_presence.get(s) and not tgt_presence.get(s)]
+
+    out_fields = _collect_field_values(output_xml, _KEY_FIELDS)
+    tgt_fields = _collect_field_values(target_text, _KEY_FIELDS)
+    mismatches: List[Dict[str, Any]] = []
+    for field in _KEY_FIELDS:
+        tvals = tgt_fields.get(field, [])
+        ovals = out_fields.get(field, [])
+        if not tvals and not ovals:
+            continue
+        if tvals != ovals:
+            mismatches.append({
+                "field": field,
+                "target": tvals[:3],
+                "output": ovals[:3],
+            })
+
+    score_penalty = len(missing) + len(extra) + len(mismatches)
+    if score_penalty == 0:
+        status = "matches_target"
+        summary = "Output matches target (structure and key fields)."
+    elif len(missing) <= 2 and len(mismatches) <= 4:
+        status = "partial_match"
+        summary = (
+            f"Output partially matches target: {len(missing)} missing segment(s), "
+            f"{len(extra)} extra segment(s), {len(mismatches)} mismatched field(s)."
+        )
+    else:
+        status = "does_not_match"
+        summary = (
+            f"Output does not match target: {len(missing)} missing segment(s), "
+            f"{len(extra)} extra segment(s), {len(mismatches)} mismatched field(s)."
+        )
+
+    result.update({
+        "target_match_status": status,
+        "target_match_summary": summary,
+        "missing_target_segments": missing,
+        "extra_output_segments": extra,
+        "mismatched_fields": mismatches,
+    })
+    return result
+
+
+def _find_xslt_line_for_field(xslt_content: str, field: str) -> tuple[int, str]:
+    lines = xslt_content.splitlines()
+    for i, ln in enumerate(lines, start=1):
+        if field in ln or field.lower() in ln.lower():
+            return i, ln.strip()
+    return 1, lines[0].strip() if lines else ""
+
+
+def _looks_like_date(v: str) -> bool:
+    return bool(re.fullmatch(r"\d{6,8}", (v or "").strip()))
+
+
+def _looks_like_decimal(v: str) -> bool:
+    return bool(re.fullmatch(r"-?\d+(\.\d+)?", (v or "").strip()))
+
+
+def generate_autofix_suggestions(comparison_result: Dict[str, Any], xslt_content: str) -> list:
+    """
+    Analyze mismatches and suggest concrete XSLT fixes with line numbers.
+    """
+    suggestions = []
+    mismatches = comparison_result.get("mismatched_fields", []) or []
+    for mm in mismatches:
+        field = str(mm.get("field", ""))
+        target_val = (mm.get("target") or [""])[0]
+        output_val = (mm.get("output") or [""])[0]
+        line_no, current_code = _find_xslt_line_for_field(xslt_content, field)
+
+        if _looks_like_date(str(target_val)) and not _looks_like_date(str(output_val)):
+            suggestions.append({
+                "issue": f"{field} date format mismatch ({output_val} vs {target_val})",
+                "xslt_line": line_no,
+                "current_code": current_code,
+                "suggested_fix": "<xsl:value-of select=\"fn:format-date(current-date(), '[Y0001][M01][D01]')\"/>",
+                "explanation": "Format date to EDI YYYYMMDD-compatible output.",
+                "apply_prompt": f"Update {field} to output YYYYMMDD format using fn:format-date/substring logic.",
+            })
+        elif _looks_like_decimal(str(target_val)) and _looks_like_decimal(str(output_val)):
+            t_dec = len(str(target_val).split(".")[1]) if "." in str(target_val) else 0
+            o_dec = len(str(output_val).split(".")[1]) if "." in str(output_val) else 0
+            if t_dec != o_dec:
+                fmt = "0." + ("0" * max(t_dec, 1))
+                suggestions.append({
+                    "issue": f"{field} decimal precision mismatch ({output_val} vs {target_val})",
+                    "xslt_line": line_no,
+                    "current_code": current_code,
+                    "suggested_fix": f"<xsl:value-of select=\"format-number({field}, '{fmt}')\"/>",
+                    "explanation": f"Enforce {t_dec} decimal places with format-number.",
+                    "apply_prompt": f"Format {field} with format-number to {t_dec} decimal places.",
+                })
+        elif str(output_val).strip() in ("", "(empty)"):
+            suggestions.append({
+                "issue": f"{field} is empty in output",
+                "xslt_line": line_no,
+                "current_code": current_code,
+                "suggested_fix": f"<xsl:value-of select=\"{field}\"/>",
+                "explanation": "Map a non-empty source value into this field.",
+                "apply_prompt": f"Fix empty mapping for {field}; map from appropriate source path.",
+            })
+    return suggestions
 
 # ── Altova extension detection ────────────────────────────────────────────────
 
