@@ -49,8 +49,20 @@ All state is in-memory only — no disk persistence required.
 """
 
 import uuid
+import difflib
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, List, Optional
+
+
+@dataclass
+class XSLTRevision:
+    id: str
+    content: str
+    timestamp: str
+    description: str
+    parent_id: Optional[str] = None
+    diff_from_parent: Optional[str] = None
 
 
 @dataclass
@@ -89,6 +101,12 @@ class Session:
     # How many characters of recent history to inject into non-explain prompts.
     # Kept small to avoid blowing the token budget of the target engine.
     max_context_chars: int = 3_000
+
+    # Explicit file-role paths (source_path values from ingested metadata).
+    active_xslt_file: Optional[str] = None
+    active_source_file: Optional[str] = None
+    active_target_file: Optional[str] = None
+    xslt_revisions: List[XSLTRevision] = field(default_factory=list)
 
     # ── Public helpers ────────────────────────────────────────────────────────
 
@@ -151,10 +169,49 @@ class Session:
             if f.get("metadata", {}).get("filename", "") == old_filename:
                 self.ingested_files[i] = new_ingested
                 self.ingested = new_ingested
+                old_path = f.get("metadata", {}).get("source_path", "")
+                new_path = new_ingested.get("metadata", {}).get("source_path", "")
+                if old_path and new_path:
+                    if self.active_xslt_file == old_path:
+                        self.active_xslt_file = new_path
+                    if self.active_source_file == old_path:
+                        self.active_source_file = new_path
+                    if self.active_target_file == old_path:
+                        self.active_target_file = new_path
                 self.agent = None   # explain agent is file-specific — reset it
                 return
         # Not found — treat as a new file
         self.add_file(new_ingested)
+
+    def get_ingested_by_source_path(self, source_path: Optional[str]) -> Optional[dict]:
+        """Return the ingested dict whose metadata.source_path matches source_path."""
+        if not source_path:
+            return None
+        for f in reversed(self.ingested_files):
+            if f.get("metadata", {}).get("source_path", "") == source_path:
+                return f
+        return None
+
+    def set_role_file(self, role: str, source_path: Optional[str]) -> None:
+        """Set a file role path (xslt, source, target)."""
+        role = (role or "").lower().strip()
+        if role == "xslt":
+            self.active_xslt_file = source_path or None
+        elif role == "source":
+            self.active_source_file = source_path or None
+        elif role == "target":
+            self.active_target_file = source_path or None
+
+    def get_role_file(self, role: str) -> Optional[str]:
+        """Get a role path (xslt, source, target)."""
+        role = (role or "").lower().strip()
+        if role == "xslt":
+            return self.active_xslt_file
+        if role == "source":
+            return self.active_source_file
+        if role == "target":
+            return self.active_target_file
+        return None
 
     def add_turn(self, intent: str, user_msg: str, response: str) -> None:
         """Record one completed dispatch turn in the history."""
@@ -169,6 +226,62 @@ class Session:
             "user":      user_msg,
             "assistant": stored_response,
         })
+
+    def save_xslt_revision(self, content: str, description: str) -> str:
+        parent = self.xslt_revisions[-1] if self.xslt_revisions else None
+        diff_text = None
+        if parent is not None:
+            diff = difflib.unified_diff(
+                parent.content.splitlines(),
+                content.splitlines(),
+                fromfile="parent",
+                tofile="current",
+                lineterm="",
+            )
+            diff_text = "\n".join(diff)
+        rev = XSLTRevision(
+            id=uuid.uuid4().hex,
+            content=content,
+            timestamp=datetime.now().strftime("%Y-%m-%d %I:%M %p"),
+            description=description or "XSLT modification",
+            parent_id=parent.id if parent else None,
+            diff_from_parent=diff_text,
+        )
+        self.xslt_revisions.append(rev)
+        return rev.id
+
+    def get_latest_xslt(self) -> Optional[XSLTRevision]:
+        return self.xslt_revisions[-1] if self.xslt_revisions else None
+
+    def compare_revisions(self, rev_id_1: str, rev_id_2: str) -> dict:
+        rev1 = next((r for r in self.xslt_revisions if r.id == rev_id_1), None)
+        rev2 = next((r for r in self.xslt_revisions if r.id == rev_id_2), None)
+        if rev1 is None or rev2 is None:
+            return {
+                "diff_lines": [],
+                "summary": "Revision(s) not found",
+                "change_descriptions": [],
+            }
+        diff_lines = list(difflib.unified_diff(
+            rev1.content.splitlines(),
+            rev2.content.splitlines(),
+            fromfile=rev1.id,
+            tofile=rev2.id,
+            lineterm="",
+        ))
+        changed = [
+            ln for ln in diff_lines
+            if (ln.startswith("+") and not ln.startswith("+++"))
+            or (ln.startswith("-") and not ln.startswith("---"))
+        ]
+        return {
+            "diff_lines": diff_lines,
+            "summary": f"{len(changed)} changed line(s) between selected revisions",
+            "change_descriptions": [
+                rev1.description,
+                rev2.description,
+            ],
+        }
 
     def get_context_str(self) -> str:
         """
@@ -209,6 +322,10 @@ class Session:
         self.ingested       = None
         self.agent          = None
         self.history        = []
+        self.active_xslt_file = None
+        self.active_source_file = None
+        self.active_target_file = None
+        self.xslt_revisions = []
 
     # ── Dunder helpers ────────────────────────────────────────────────────────
 

@@ -88,6 +88,12 @@ def _init_state() -> None:
         st.session_state.active_files = []      # [{"name": str, "path": str}]
     if "pending_paths" not in st.session_state:
         st.session_state.pending_paths = []     # new file paths to send on next dispatch
+    if "active_xslt_file" not in st.session_state:
+        st.session_state.active_xslt_file = None
+    if "active_source_file" not in st.session_state:
+        st.session_state.active_source_file = None
+    if "active_target_file" not in st.session_state:
+        st.session_state.active_target_file = None
     if "audit_dict" not in st.session_state:
         st.session_state.audit_dict = None
     if "audit_ingested" not in st.session_state:
@@ -116,6 +122,8 @@ def _init_state() -> None:
         st.session_state.latest_test_output = None
     if "test_readiness_status" not in st.session_state:
         st.session_state.test_readiness_status = ""
+    if "queued_user_prompt" not in st.session_state:
+        st.session_state.queued_user_prompt = None
 
 
 _init_state()
@@ -202,6 +210,38 @@ def _badge(intent: str) -> str:
 
 def _active_file_names() -> set:
     return {f["name"] for f in st.session_state.active_files}
+
+
+def _active_file_by_path(path: Optional[str]) -> Optional[dict]:
+    if not path:
+        return None
+    for af in st.session_state.active_files:
+        if af.get("path") == path:
+            return af
+    return None
+
+
+def _role_display_name(path: Optional[str]) -> str:
+    af = _active_file_by_path(path)
+    if af:
+        return af.get("name", "")
+    if path:
+        return Path(path).name
+    return ""
+
+
+def _sync_role_paths_to_session() -> None:
+    s = st.session_state.session
+    s.set_role_file("xslt", st.session_state.get("active_xslt_file"))
+    s.set_role_file("source", st.session_state.get("active_source_file"))
+    s.set_role_file("target", st.session_state.get("active_target_file"))
+
+
+def _sync_role_paths_from_session() -> None:
+    s = st.session_state.session
+    st.session_state.active_xslt_file = s.get_role_file("xslt")
+    st.session_state.active_source_file = s.get_role_file("source")
+    st.session_state.active_target_file = s.get_role_file("target")
 
 def _extract_xml_fence(text: str) -> Optional[str]:
     """
@@ -303,9 +343,13 @@ def _ingest_and_update_session(
     else:
         session.add_file(new_ing)
         st.session_state.active_files.append({"name": _new_display, "path": str(dest)})
+    _sync_role_paths_from_session()
 
 
 def _pick_sample_input_path() -> Optional[str]:
+    selected = st.session_state.get("active_source_file")
+    if selected and Path(selected).exists():
+        return selected
     for ing in reversed(st.session_state.session.ingested_files):
         meta = ing.get("metadata", {})
         file_type = meta.get("file_type", "")
@@ -359,7 +403,8 @@ with st.sidebar:
             reset_session_stats()
             for key in ["logged_in", "current_user", "session", "messages",
                         "active_files", "pending_paths", "audit_dict",
-                        "audit_ingested", "last_route", "llm_provider", "llm_api_key"]:
+                        "audit_ingested", "last_route", "llm_provider", "llm_api_key",
+                        "active_xslt_file", "active_source_file", "active_target_file"]:
                 st.session_state.pop(key, None)
             st.rerun()
     st.divider()
@@ -422,15 +467,77 @@ with st.sidebar:
         if to_remove is not None:
             removed = st.session_state.active_files.pop(to_remove)
             session = st.session_state.session
+            removed_path = removed.get("path", "")
             session.ingested_files = [
                 f for f in session.ingested_files
-                if f.get("metadata", {}).get("filename", "") != removed["name"]
+                if f.get("metadata", {}).get("source_path", "") != removed_path
             ]
             session.ingested = session.ingested_files[-1] if session.ingested_files else None
             session.agent    = None
+            if st.session_state.active_xslt_file == removed_path:
+                st.session_state.active_xslt_file = None
+            if st.session_state.active_source_file == removed_path:
+                st.session_state.active_source_file = None
+            if st.session_state.active_target_file == removed_path:
+                st.session_state.active_target_file = None
+            _sync_role_paths_to_session()
             st.rerun()
     else:
         st.caption("No files — attach via the paperclip in chat.")
+
+    # ── Explicit role selectors ───────────────────────────────────────────────
+    _all_files = st.session_state.active_files
+    _all_opts = ["(none)"] + [af["path"] for af in _all_files]
+    _all_labels = {"(none)": "(none)"}
+    for af in _all_files:
+        _all_labels[af["path"]] = af["name"]
+
+    _xslt_opts = ["(none)"]
+    for ing in st.session_state.session.ingested_files:
+        _meta = ing.get("metadata", {})
+        if _meta.get("file_type") == "XSLT":
+            _p = _meta.get("source_path", "")
+            if _p:
+                _xslt_opts.append(_p)
+                _all_labels.setdefault(_p, Path(_p).name)
+
+    def _select_index(options: list, current: Optional[str]) -> int:
+        if current and current in options:
+            return options.index(current)
+        return 0
+
+    st.markdown("**File Roles**")
+    _selected_xslt = st.selectbox(
+        "XSLT file selector",
+        options=_xslt_opts,
+        format_func=lambda v: _all_labels.get(v, v),
+        index=_select_index(_xslt_opts, st.session_state.get("active_xslt_file")),
+        key="role_select_xslt",
+    )
+    _selected_source = st.selectbox(
+        "Source file selector",
+        options=_all_opts,
+        format_func=lambda v: _all_labels.get(v, v),
+        index=_select_index(_all_opts, st.session_state.get("active_source_file")),
+        key="role_select_source",
+    )
+    _selected_target = st.selectbox(
+        "Target file selector",
+        options=_all_opts,
+        format_func=lambda v: _all_labels.get(v, v),
+        index=_select_index(_all_opts, st.session_state.get("active_target_file")),
+        key="role_select_target",
+    )
+
+    st.session_state.active_xslt_file = None if _selected_xslt == "(none)" else _selected_xslt
+    st.session_state.active_source_file = None if _selected_source == "(none)" else _selected_source
+    st.session_state.active_target_file = None if _selected_target == "(none)" else _selected_target
+    _sync_role_paths_to_session()
+
+    st.markdown("**Role Debug**")
+    st.caption(f"XSLT: `{_role_display_name(st.session_state.active_xslt_file) or '(none)'}`")
+    st.caption(f"Source: `{_role_display_name(st.session_state.active_source_file) or '(none)'}`")
+    st.caption(f"Target: `{_role_display_name(st.session_state.active_target_file) or '(none)'}`")
     st.divider()
 
     # ── RAG index ─────────────────────────────────────────────────────────────
@@ -494,6 +601,9 @@ with st.sidebar:
         st.session_state.messages       = []
         st.session_state.active_files   = []
         st.session_state.pending_paths  = []
+        st.session_state.active_xslt_file = None
+        st.session_state.active_source_file = None
+        st.session_state.active_target_file = None
         st.session_state.audit_dict     = None
         st.session_state.audit_ingested = None
         st.session_state.last_route     = None
@@ -584,7 +694,9 @@ with tab_chat:
     st.caption(
         "Attach mapping files using the paperclip button below, then ask anything — "
         "explain, modify, generate, simulate, or audit. "
-        "The agent remembers the full conversation and all uploaded files."
+        "The agent remembers the full conversation and all uploaded files. "
+        "Roles are strict: XSLT for explain/modify/review, source for simulation input, "
+        "target for output validation only."
     )
 
     # ── Render conversation history ────────────────────────────────────────────
@@ -594,12 +706,104 @@ with tab_chat:
             if role == "assistant":
                 intent = msg.get("intent", "")
                 file_used = msg.get("file_used", "")
+                source_used = msg.get("source_file_used", "")
+                target_used = msg.get("target_file_used", "")
                 if intent:
                     header = _badge(intent)
                     if file_used:
                         header += f'&nbsp;<span style="font-size:0.72rem;color:#64748b;">using <b>{file_used}</b></span>'
+                    if source_used:
+                        header += f'&nbsp;<span style="font-size:0.72rem;color:#64748b;">source <b>{source_used}</b></span>'
+                    if target_used:
+                        header += f'&nbsp;<span style="font-size:0.72rem;color:#64748b;">target <b>{target_used}</b></span>'
                     st.markdown(header, unsafe_allow_html=True)
             st.markdown(msg["content"])
+            if role == "assistant" and msg.get("intent") == "compare":
+                _comp = msg.get("xslt_compare_data") or {}
+                if _comp:
+                    st.markdown("#### Compare Details")
+                    st.caption(f"Risk level: `{_comp.get('risk_level', 'unknown')}`")
+                    _added = _comp.get("added_segments_in_revised", []) or []
+                    _missing = _comp.get("missing_segments_in_revised", []) or []
+                    _div = _comp.get("mapping_divergence", []) or []
+                    if _added:
+                        st.write(f"Added segments: `{', '.join(_added[:20])}`")
+                    if _missing:
+                        st.write(f"Removed segments: `{', '.join(_missing[:20])}`")
+                    if _div:
+                        st.write(f"Mapping divergence points: `{len(_div)}`")
+                    _diff_preview = _comp.get("diff_preview", "")
+                    if _diff_preview:
+                        st.markdown("Diff preview:")
+                        st.code(_diff_preview, language="diff")
+            if role == "assistant" and msg.get("intent") == "simulate":
+                _status = msg.get("target_match_status", "")
+                _summary = msg.get("target_match_summary", "")
+                _missing = msg.get("missing_target_segments", []) or []
+                _extra = msg.get("extra_output_segments", []) or []
+                _mismatch = msg.get("mismatched_fields", []) or []
+                if _status:
+                    st.markdown("#### Target vs Output Comparison")
+                    if _status == "matches_target":
+                        st.success(_summary or "Output matches target.")
+                    elif _status == "partial_match":
+                        st.warning(_summary or "Output partially matches target.")
+                    elif _status == "does_not_match":
+                        st.error(_summary or "Output does not match target.")
+                    else:
+                        st.info(_summary or "Target comparison unavailable.")
+                    if _missing:
+                        st.write(f"Missing target segments: `{', '.join(_missing)}`")
+                    if _extra:
+                        st.write(f"Extra output segments: `{', '.join(_extra)}`")
+                    if _mismatch:
+                        st.write("Mismatched fields:")
+                        for row in _mismatch[:12]:
+                            fld = row.get("field", "?")
+                            tgt = ", ".join(row.get("target", [])[:3]) or "(empty)"
+                            out = ", ".join(row.get("output", [])[:3]) or "(empty)"
+                            st.write(f"- `{fld}` target=`{tgt}` output=`{out}`")
+                _fixes = msg.get("autofix_suggestions", []) or []
+                if _fixes:
+                    st.markdown("#### Auto-fix suggestions")
+                    for i, fx in enumerate(_fixes[:8]):
+                        with st.expander(f"{i+1}. {fx.get('issue', 'Suggestion')}"):
+                            st.caption(f"XSLT line: `{fx.get('xslt_line', '?')}`")
+                            st.code(fx.get("current_code", ""), language="xml")
+                            st.code(fx.get("suggested_fix", ""), language="xml")
+                            st.write(fx.get("explanation", ""))
+                            if st.button("Apply this fix", key=f"apply_fix_{_msg_idx}_{i}"):
+                                st.session_state.queued_user_prompt = fx.get("apply_prompt", "")
+                                st.rerun()
+            if role == "assistant" and msg.get("intent") == "modify":
+                _m_status = msg.get("modify_status", "")
+                _m_guidance = msg.get("modify_guidance", {}) or {}
+                if _m_status == "needs_confirmation" and _m_guidance:
+                    st.warning("Action required before applying this modification.")
+                    st.write(_m_guidance.get("message", "Please confirm how to proceed."))
+                    _recs = _m_guidance.get("recommendations", []) or []
+                    if _recs:
+                        st.write("Recommended alternatives:")
+                        for rec in _recs[:3]:
+                            seg_part = f" in {rec.get('segment')} segment" if rec.get("segment") else ""
+                            st.info(f"{rec.get('field','')} {seg_part} - {rec.get('name','')} ({rec.get('reason','')})")
+                    _a, _b, _c = st.columns(3)
+                    with _a:
+                        if st.button("Proceed as requested", key=f"mod_proceed_{_msg_idx}"):
+                            srcf = _m_guidance.get("source_field") or "InvoiceNetAmount"
+                            tgtf = _m_guidance.get("target_field") or "BIG04"
+                            seg = _m_guidance.get("target_segment") or "BIG"
+                            st.session_state.queued_user_prompt = f"Add {srcf} to {tgtf} in {seg} segment and proceed anyway"
+                            st.rerun()
+                    with _b:
+                        if st.button("Use recommended", key=f"mod_reco_{_msg_idx}") and _recs:
+                            first = _recs[0]
+                            srcf = _m_guidance.get("source_field") or "source field"
+                            seg = first.get("segment", _m_guidance.get("target_segment", ""))
+                            st.session_state.queued_user_prompt = f"Add {srcf} to {first.get('field','')} in {seg} segment"
+                            st.rerun()
+                    with _c:
+                        st.button("Cancel", key=f"mod_cancel_{_msg_idx}", disabled=True)
             # Inline download button — only on assistant messages that produced an XSLT
             if msg.get("download_xslt"):
                 dl_fname = msg.get("download_filename", "output.xml")
@@ -643,12 +847,28 @@ with tab_chat:
                 try:
                     _ing = ingest_file(file_path=_saved)
                     st.session_state.session.add_file(_ing)
+                    _ftype = _ing.get("metadata", {}).get("file_type", "")
+                    if _ftype == "XSLT":
+                        if not st.session_state.active_xslt_file:
+                            st.session_state.active_xslt_file = _saved
+                    else:
+                        if not st.session_state.active_source_file:
+                            st.session_state.active_source_file = _saved
+                        elif (
+                            not st.session_state.active_target_file
+                            and st.session_state.active_source_file != _saved
+                        ):
+                            st.session_state.active_target_file = _saved
                 except Exception:
                     st.session_state.pending_paths.append(_saved)
+            _sync_role_paths_to_session()
             st.rerun()
 
     # ── Chat input ─────────────────────────────────────────────────────────────
     user_input = st.chat_input("Ask anything about your mapping files…")
+    if not user_input and st.session_state.get("queued_user_prompt"):
+        user_input = st.session_state.queued_user_prompt
+        st.session_state.queued_user_prompt = None
 
     if user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
@@ -662,6 +882,11 @@ with tab_chat:
                     user_message=user_input,
                     file_paths=st.session_state.pending_paths,
                     session=st.session_state.session,
+                    source_file=st.session_state.get("active_source_file"),
+                    target_file=st.session_state.get("active_target_file"),
+                    active_xslt_file=st.session_state.get("active_xslt_file"),
+                    active_source_file=st.session_state.get("active_source_file"),
+                    active_target_file=st.session_state.get("active_target_file"),
                     provider=_active_provider,
                     api_key=_active_api_key or None,
                 )
@@ -684,7 +909,7 @@ with tab_chat:
         else:
             response_text = result["primary_response"] or "_No response generated._"
             intent        = result["route"].get("primary", "unknown")
-            file_used     = result.get("primary_file_name", "")
+            file_used     = result.get("modify_file_used") or result.get("primary_file_name", "")
             st.session_state.last_route = result["route"]
 
             # ── Capture XSLT for review tab (generate / modify) ────────────────
@@ -698,7 +923,7 @@ with tab_chat:
             if intent == "generate":
                 extracted = _extract_xml_fence(response_text)
             elif intent == "modify":
-                extracted = _extract_modify_after_block(response_text) or _extract_xml_fence(response_text)
+                extracted = result.get("patched_xslt")
             if extracted:
                 st.session_state.review_before_xslt = before
                 st.session_state.review_after_xslt  = extracted
@@ -790,6 +1015,17 @@ with tab_chat:
             "content":           response_text,
             "intent":            intent,
             "file_used":         file_used,
+            "source_file_used":  result.get("source_file_used", "") if result else "",
+            "target_file_used":  result.get("target_file_used", "") if result else "",
+            "target_match_status": result.get("target_match_status", "") if result else "",
+            "target_match_summary": result.get("target_match_summary", "") if result else "",
+            "missing_target_segments": result.get("missing_target_segments", []) if result else [],
+            "extra_output_segments": result.get("extra_output_segments", []) if result else [],
+            "mismatched_fields": result.get("mismatched_fields", []) if result else [],
+            "autofix_suggestions": result.get("autofix_suggestions", []) if result else [],
+            "xslt_compare_data": result.get("xslt_compare_data", None) if result else None,
+            "modify_status": result.get("modify_status", "") if result else "",
+            "modify_guidance": result.get("modify_guidance", {}) if result else {},
             "download_xslt":     download_xslt,
             "download_filename": download_filename,
             "download_label":    download_label,
@@ -815,6 +1051,28 @@ with tab_review:
             st.caption(f"**Rule key:** `{rule_key}`")
             if st.session_state.latest_version_path:
                 st.caption(f"**Latest active revision:** `{st.session_state.latest_version_path}`")
+            _revs = st.session_state.session.xslt_revisions
+            if _revs:
+                _rev_labels = [
+                    f"Revision {i+1} ({r.timestamp}) — {r.description[:48]}"
+                    for i, r in enumerate(_revs)
+                ]
+                _sel_idx = st.selectbox(
+                    "Revision selector",
+                    options=list(range(len(_revs))),
+                    format_func=lambda idx: _rev_labels[idx],
+                    index=len(_revs) - 1,
+                    key="rev_selector_idx",
+                )
+                _sel_rev = _revs[_sel_idx]
+                st.caption(f"Viewing revision {_sel_idx + 1}: `{_sel_rev.timestamp}`")
+                if _sel_idx >= 0:
+                    st.session_state.review_after_xslt = _sel_rev.content
+                if _sel_idx > 0:
+                    _prev = _revs[_sel_idx - 1]
+                    _cmp = st.session_state.session.compare_revisions(_prev.id, _sel_rev.id)
+                    if _cmp.get("summary"):
+                        st.info(_cmp["summary"])
             if st.session_state.comparison_summary:
                 st.info(st.session_state.comparison_summary)
         with top_r:
