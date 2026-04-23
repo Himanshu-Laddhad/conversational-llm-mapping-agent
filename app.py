@@ -775,6 +775,35 @@ with tab_chat:
                             if st.button("Apply this fix", key=f"apply_fix_{_msg_idx}_{i}"):
                                 st.session_state.queued_user_prompt = fx.get("apply_prompt", "")
                                 st.rerun()
+            if role == "assistant" and msg.get("intent") == "modify":
+                _m_status = msg.get("modify_status", "")
+                _m_guidance = msg.get("modify_guidance", {}) or {}
+                if _m_status == "needs_confirmation" and _m_guidance:
+                    st.warning("Action required before applying this modification.")
+                    st.write(_m_guidance.get("message", "Please confirm how to proceed."))
+                    _recs = _m_guidance.get("recommendations", []) or []
+                    if _recs:
+                        st.write("Recommended alternatives:")
+                        for rec in _recs[:3]:
+                            seg_part = f" in {rec.get('segment')} segment" if rec.get("segment") else ""
+                            st.info(f"{rec.get('field','')} {seg_part} - {rec.get('name','')} ({rec.get('reason','')})")
+                    _a, _b, _c = st.columns(3)
+                    with _a:
+                        if st.button("Proceed as requested", key=f"mod_proceed_{_msg_idx}"):
+                            srcf = _m_guidance.get("source_field") or "InvoiceNetAmount"
+                            tgtf = _m_guidance.get("target_field") or "BIG04"
+                            seg = _m_guidance.get("target_segment") or "BIG"
+                            st.session_state.queued_user_prompt = f"Add {srcf} to {tgtf} in {seg} segment and proceed anyway"
+                            st.rerun()
+                    with _b:
+                        if st.button("Use recommended", key=f"mod_reco_{_msg_idx}") and _recs:
+                            first = _recs[0]
+                            srcf = _m_guidance.get("source_field") or "source field"
+                            seg = first.get("segment", _m_guidance.get("target_segment", ""))
+                            st.session_state.queued_user_prompt = f"Add {srcf} to {first.get('field','')} in {seg} segment"
+                            st.rerun()
+                    with _c:
+                        st.button("Cancel", key=f"mod_cancel_{_msg_idx}", disabled=True)
             # Inline download button — only on assistant messages that produced an XSLT
             if msg.get("download_xslt"):
                 dl_fname = msg.get("download_filename", "output.xml")
@@ -995,6 +1024,8 @@ with tab_chat:
             "mismatched_fields": result.get("mismatched_fields", []) if result else [],
             "autofix_suggestions": result.get("autofix_suggestions", []) if result else [],
             "xslt_compare_data": result.get("xslt_compare_data", None) if result else None,
+            "modify_status": result.get("modify_status", "") if result else "",
+            "modify_guidance": result.get("modify_guidance", {}) if result else {},
             "download_xslt":     download_xslt,
             "download_filename": download_filename,
             "download_label":    download_label,

@@ -377,7 +377,7 @@ def dispatch(
         from .file_ingestion import ingest_file
         from .groq_agent import explain
         from .simulation_engine import simulate, compare_output_to_target, generate_autofix_suggestions
-        from .modification_engine import modify
+        from .modification_engine import modify, extract_modify_guidance
         from .xslt_generator import generate
         from .audit_engine import audit
         from .rag_engine import query_folder
@@ -386,7 +386,7 @@ def dispatch(
         from file_ingestion import ingest_file
         from groq_agent import explain
         from simulation_engine import simulate, compare_output_to_target, generate_autofix_suggestions
-        from modification_engine import modify
+        from modification_engine import modify, extract_modify_guidance
         from xslt_generator import generate
         from audit_engine import audit           # type: ignore
         from rag_engine import query_folder      # type: ignore
@@ -614,6 +614,8 @@ def dispatch(
     extra_output_segments: List[str] = []
     mismatched_fields: List[Dict[str, Any]] = []
     autofix_suggestions: List[Dict[str, Any]] = []
+    modify_status: str = "completed"
+    modify_guidance: Dict[str, Any] = {}
 
     # Re-use the existing FileAgent from session if explain was run before,
     # so the full conversation history inside the agent is preserved.
@@ -735,6 +737,9 @@ def dispatch(
                     api_key=api_key,
                     model=resolved_model,
                 )
+                modify_guidance = extract_modify_guidance(response)
+                if modify_guidance.get("status"):
+                    modify_status = str(modify_guidance.get("status"))
                 modify_file_used = (xslt_ingested or {}).get("metadata", {}).get("filename", "")
                 if source_ingested is not None:
                     source_file_used = source_ingested.get("metadata", {}).get("filename", "")
@@ -902,6 +907,8 @@ def dispatch(
         "mismatched_fields": mismatched_fields,
         "autofix_suggestions": autofix_suggestions,
         "xslt_compare_data": None,
+        "modify_status": modify_status,
+        "modify_guidance": modify_guidance,
         "session":            session,
         "primary_file_name":  _primary_file_name,
     }
