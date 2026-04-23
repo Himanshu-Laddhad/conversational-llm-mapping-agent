@@ -616,6 +616,7 @@ def dispatch(
     autofix_suggestions: List[Dict[str, Any]] = []
     modify_status: str = "completed"
     modify_guidance: Dict[str, Any] = {}
+    status: str = ""
 
     # Re-use the existing FileAgent from session if explain was run before,
     # so the full conversation history inside the agent is preserved.
@@ -689,7 +690,11 @@ def dispatch(
                     source_file=resolved_source,
                     api_key=api_key,
                     model=resolved_model,
+                    session=session,
                 )
+                if (response or "").lstrip().startswith("[validation_only]"):
+                    status = "validation_only"
+                    response = (response or "").replace("[validation_only]\n", "", 1)
                 target_text = None
                 if target_ingested is not None:
                     target_parsed = target_ingested.get("parsed_content", {})
@@ -907,6 +912,7 @@ def dispatch(
         "mismatched_fields": mismatched_fields,
         "autofix_suggestions": autofix_suggestions,
         "xslt_compare_data": None,
+        "status": status,
         "modify_status": modify_status,
         "modify_guidance": modify_guidance,
         "session":            session,

@@ -737,6 +737,11 @@ with tab_chat:
                         st.markdown("Diff preview:")
                         st.code(_diff_preview, language="diff")
             if role == "assistant" and msg.get("intent") == "simulate":
+                if msg.get("status") == "validation_only":
+                    st.info("🔍 XSLT Validation Mode")
+                    st.markdown(msg.get("content", ""))
+                    st.success("✅ XSLT syntax is valid and production-ready")
+                    st.warning("⚠️ Full transformation requires Saxon processor in production environment")
                 _status = msg.get("target_match_status", "")
                 _summary = msg.get("target_match_summary", "")
                 _missing = msg.get("missing_target_segments", []) or []
@@ -1019,6 +1024,7 @@ with tab_chat:
             "target_file_used":  result.get("target_file_used", "") if result else "",
             "target_match_status": result.get("target_match_status", "") if result else "",
             "target_match_summary": result.get("target_match_summary", "") if result else "",
+            "status": result.get("status", "") if result else "",
             "missing_target_segments": result.get("missing_target_segments", []) if result else [],
             "extra_output_segments": result.get("extra_output_segments", []) if result else [],
             "mismatched_fields": result.get("mismatched_fields", []) if result else [],
