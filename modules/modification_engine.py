@@ -385,6 +385,17 @@ def parse_add_request(user_description: str, api_key: Optional[str] = None, mode
     fld: Optional[str] = None
     fmt = ""
 
+    # Pattern: "Add X to FIELD in FORMAT format"
+    # Example: "Add ShipmentDate to DTM02 in YYYYMMDD format"
+    m = re.search(r"add\s+(\w+)\s+to\s+([A-Z]{2,4}\d{2})\s+in\s+(\w+)\s+format", text, re.IGNORECASE)
+    if m:
+        source_field = m.group(1)
+        target_field = m.group(2).upper()
+        format_spec = m.group(3)
+        segment_match = re.match(r"([A-Z]{2,4})", target_field)
+        target_segment = segment_match.group(1) if segment_match else target_field
+        return source_field, target_segment, target_field, format_spec
+
     # Pattern: Add X to Y as Z
     m = re.search(r"add\s+([A-Za-z_][A-Za-z0-9_]*)\s+to\s+([A-Za-z_][A-Za-z0-9_]*)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)", text, re.IGNORECASE)
     if m:
@@ -416,6 +427,12 @@ def parse_add_request(user_description: str, api_key: Optional[str] = None, mode
             fld = m.group(1)
     if not seg and fld:
         seg = re.sub(r"\d.*$", "", fld)
+    # If parser captured field token as segment (e.g., BIG04), split it.
+    if seg and re.match(r"^[A-Za-z]{2,4}\d{2}$", seg):
+        if not fld:
+            fld = seg.upper()
+        if fld and fld.upper() == seg.upper():
+            seg = re.sub(r"\d.*$", "", seg)
 
     low = text.lower()
     if re.search(r"\byyyy\s*/?\s*mm\s*/?\s*dd\b", low) or "yyyymmdd" in low or "ccyymmdd" in low:
@@ -937,6 +954,19 @@ def _apply_add_segment_via_dom(xslt_content: str, location: dict, field_code: st
         segment = find_segment_element(tree, location.get("target_segment", ""))
         if segment is None:
             raise ValueError("Cannot find target segment element for insertion")
+        # Replace path: remove existing field first to avoid nested duplicates.
+        if location.get("replace_existing"):
+            target_field = str(location.get("target_field", "") or "")
+            if target_field:
+                old_hits = segment.xpath(
+                    f".//*[local-name()='{target_field}'] | .//xsl:element[@name='{target_field}']",
+                    namespaces=_XSL_NS,
+                )
+                if old_hits:
+                    old = old_hits[0]
+                    parent = old.getparent()
+                    if parent is not None:
+                        parent.remove(old)
         new_field = etree.fromstring(field_code.encode("utf-8"), parser=parser)
         segment.append(new_field)
         return etree.tostring(tree, encoding="unicode")
@@ -976,6 +1006,21 @@ def locate_element_in_xslt(xslt_content: str, user_field_description: str, rag_e
         if segment_exists:
             field_check = check_if_field_exists(xslt_content, seg, fld)
             if field_check.get("exists"):
+                if any(k in desc.lower() for k in ("replace existing", "overwrite", "replace it", "replace mapping")):
+                    return {
+                        "found": True,
+                        "is_add_request": True,
+                        "add_mode": "add_to_existing",
+                        "replace_existing": True,
+                        "source_field": src,
+                        "source_location": source_location,
+                        "target_segment": seg,
+                        "target_field": fld,
+                        "format": fmt,
+                        "recommendation": recommendation,
+                        "user_message": "",
+                        "segment_location": find_existing_segment_location(xslt_content, seg),
+                    }
                 return {
                     "found": True,
                     "is_add_request": True,
