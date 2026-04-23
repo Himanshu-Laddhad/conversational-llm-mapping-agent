@@ -18,6 +18,7 @@ credentials/
 *.pfx
 config.json
 secrets.json
+PartnerLinQ_Edelman_Award.pptx
 
 # ── Virtual Environment ───────────────────────────────────────────────────────
 .venv/
