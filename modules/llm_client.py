@@ -1,27 +1,7 @@
 """
 llm_client.py
 ─────────────
-Unified LLM client for all four supported providers.
-
-Supported providers
-───────────────────
-  groq       — Groq (llama-3.3-70b-versatile default)
-  openai     — OpenAI (gpt-4o-mini default)
-  nvidia_nim — NVIDIA NIM (meta/llama-3.3-70b-instruct default)
-  anthropic  — Anthropic (claude-3-5-haiku-20241022 default)
-
-All three of Groq, OpenAI, and NVIDIA NIM expose an OpenAI-compatible REST
-API.  We use the ``openai`` SDK for all three, just swapping the base_url.
-Anthropic uses its own SDK and response format; this module normalises the
-difference so every caller receives a plain string.
-
-Public API
-──────────
-  chat_complete(messages, api_key, model, provider, temperature, max_tokens)
-      → str   — the assistant reply as a plain string
-
-  PROVIDERS       dict[str, dict]  — metadata per provider
-  DEFAULT_MODELS  dict[str, str]   — default model name per provider
+Groq-only LLM client used across the app.
 """
 
 import time
@@ -33,32 +13,14 @@ from modules.usage_tracker import log_usage
 
 PROVIDERS: Dict[str, Dict[str, Any]] = {
     "groq": {
-        "label":    "Groq",
+        "label": "Groq",
         "base_url": "https://api.groq.com/openai/v1",
-        "env_key":  "GROQ_API_KEY",
-    },
-    "openai": {
-        "label":    "OpenAI",
-        "base_url": None,   # openai SDK default
-        "env_key":  "OPENAI_API_KEY",
-    },
-    "nvidia_nim": {
-        "label":    "NVIDIA NIM",
-        "base_url": "https://integrate.api.nvidia.com/v1",
-        "env_key":  "NVIDIA_API_KEY",
-    },
-    "anthropic": {
-        "label":    "Anthropic",
-        "base_url": None,   # anthropic SDK default
-        "env_key":  "ANTHROPIC_API_KEY",
-    },
+        "env_key": "GROQ_API_KEY",
+    }
 }
 
 DEFAULT_MODELS: Dict[str, str] = {
-    "groq":       "llama-3.3-70b-versatile",
-    "openai":     "gpt-4o-mini",
-    "nvidia_nim": "meta/llama-3.3-70b-instruct",
-    "anthropic":  "claude-3-5-haiku-20241022",
+    "groq": "llama-3.3-70b-versatile",
 }
 
 
@@ -101,31 +63,24 @@ def chat_complete(
             f"Valid options: {list(PROVIDERS)}"
         )
 
-    if provider == "anthropic":
-        return _anthropic_complete(messages, api_key, model, max_tokens, caller=caller)
-    return _openai_compat_complete(messages, api_key, model, provider, temperature, max_tokens, caller=caller)
+    if provider != "groq":
+        raise ValueError("Only provider='groq' is supported in this build.")
+    return _groq_complete(messages, api_key, model, temperature, max_tokens, caller=caller)
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
-def _openai_compat_complete(
+def _groq_complete(
     messages: List[Dict[str, str]],
     api_key: str,
     model: str,
-    provider: str,
     temperature: float,
     max_tokens: int,
     caller: str = "",
 ) -> str:
-    """Use the openai SDK (OpenAI-compatible endpoint) for Groq, OpenAI, NIM."""
-    from openai import OpenAI  # type: ignore
-
-    kwargs: Dict[str, Any] = {"api_key": api_key}
-    base_url = PROVIDERS[provider]["base_url"]
-    if base_url:
-        kwargs["base_url"] = base_url
-
-    client = OpenAI(**kwargs)
+    """Use Groq SDK only."""
+    from groq import Groq  # type: ignore
+    client = Groq(api_key=api_key)
     t0 = time.perf_counter()
     response = client.chat.completions.create(
         model=model,
@@ -138,7 +93,7 @@ def _openai_compat_complete(
     usage = response.usage
     if usage is not None:
         log_usage(
-            provider=provider,
+            provider="groq",
             model=model,
             caller=caller,
             prompt_tokens=usage.prompt_tokens,
@@ -150,52 +105,3 @@ def _openai_compat_complete(
         )
 
     return (response.choices[0].message.content or "").strip()
-
-
-def _anthropic_complete(
-    messages: List[Dict[str, str]],
-    api_key: str,
-    model: str,
-    max_tokens: int,
-    caller: str = "",
-) -> str:
-    """Use the anthropic SDK.  System message is extracted from the list."""
-    import anthropic  # type: ignore
-
-    # Anthropic expects system as a top-level param, not a message
-    system = ""
-    chat_messages: List[Dict[str, str]] = []
-    for m in messages:
-        if m.get("role") == "system":
-            system = m.get("content", "")
-        else:
-            chat_messages.append(m)
-
-    client = anthropic.Anthropic(api_key=api_key)
-    kwargs: Dict[str, Any] = {
-        "model":      model,
-        "messages":   chat_messages,
-        "max_tokens": max_tokens,
-    }
-    if system:
-        kwargs["system"] = system
-
-    t0 = time.perf_counter()
-    response = client.messages.create(**kwargs)
-    latency_ms = (time.perf_counter() - t0) * 1000
-
-    usage = response.usage
-    if usage is not None:
-        log_usage(
-            provider="anthropic",
-            model=model,
-            caller=caller,
-            prompt_tokens=usage.input_tokens,
-            completion_tokens=usage.output_tokens,
-            total_tokens=usage.input_tokens + usage.output_tokens,
-            max_tokens=max_tokens,
-            temperature=0.0,
-            latency_ms=latency_ms,
-        )
-
-    return (response.content[0].text or "").strip()
