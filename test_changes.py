@@ -34,47 +34,59 @@ print("=" * 60)
 print("TEST 1: Saxon-HE XSLT 2.0 execution (Nordstrom 810)")
 print("=" * 60)
 
-XSLT = (
+# These paths were originally hard-coded to a specific developer's Mac.
+# Test 1 is skipped when the files are absent so the suite stays green on all
+# machines.  To run it, set XSLT_TEST_FILE and SRC_TEST_FILE env vars pointing
+# at a real XSLT 2.0 mapping and its corresponding source XML.
+import os as _os
+XSLT = _os.environ.get(
+    "XSLT_TEST_FILE",
     "/Users/preetham/Downloads/PartnerlinQ MappingData"
-    "/810_C-000340_OUT/810_NordStrom_Xslt_11-08-2023.xml"
+    "/810_C-000340_OUT/810_NordStrom_Xslt_11-08-2023.xml",
 )
-SRC = (
+SRC = _os.environ.get(
+    "SRC_TEST_FILE",
     "/Users/preetham/Downloads/PartnerlinQ MappingData"
     "/810_C-000340_OUT/810"
-    "/99e1c1fe-5f71-4315-b7f5-80dfa1d02d4b/SourceFile.txt"
+    "/99e1c1fe-5f71-4315-b7f5-80dfa1d02d4b/SourceFile.txt",
 )
 
-try:
-    from modules.simulation_engine import (
-        _try_saxon_transform,
-        _detect_altova_extensions,
-        _detect_xslt_version,
-    )
+if not Path(XSLT).exists() or not Path(SRC).exists():
+    print("  [SKIP] Test files not found on this machine.")
+    print("         Set XSLT_TEST_FILE and SRC_TEST_FILE env vars to enable this test.")
+    print("         Skipping all sub-checks for Test 1.")
+else:
+    try:
+        from modules.simulation_engine import (
+            _try_saxon_transform,
+            _detect_altova_extensions,
+            _detect_xslt_version,
+        )
 
-    raw     = Path(XSLT).read_text(errors="replace")
-    version = _detect_xslt_version(raw)
-    altova  = _detect_altova_extensions(raw)
+        raw     = Path(XSLT).read_text(errors="replace")
+        version = _detect_xslt_version(raw)
+        altova  = _detect_altova_extensions(raw)
 
-    print(f"  XSLT version   : {version}")
-    print(f"  Altova calls   : {altova}")
+        print(f"  XSLT version   : {version}")
+        print(f"  Altova calls   : {altova}")
 
-    result, err = _try_saxon_transform(raw, SRC)
+        result, err = _try_saxon_transform(raw, SRC)
 
-    check("Saxon returned output (not None)",  result is not None)
-    check("No Saxon error",                    err is None)
-    check("Output contains <ST> segment",      result and "<ST>" in result)
-    check("Output contains <BIG> segment",     result and "<BIG>" in result)
-    check("XSLT version detected as 2.0",      version == "2.0")
-    check("Altova calls NOT detected (ns only)", not altova)
+        check("Saxon returned output (not None)",    result is not None)
+        check("No Saxon error",                      err is None)
+        check("Output contains <ST> segment",        result and "<ST>" in result)
+        check("Output contains <BIG> segment",       result and "<BIG>" in result)
+        check("XSLT version detected as 2.0",        version == "2.0")
+        check("Altova calls NOT detected (ns only)", not altova)
 
-    if result:
-        print()
-        print("  First 300 chars of real Saxon output:")
-        print("  " + result[:300].replace("\n", "\n  "))
+        if result:
+            print()
+            print("  First 300 chars of real Saxon output:")
+            print("  " + result[:300].replace("\n", "\n  "))
 
-except Exception as exc:
-    print(f"  [ERROR] {exc}")
-    all_results.append(False)
+    except Exception as exc:
+        print(f"  [ERROR] {exc}")
+        all_results.append(False)
 
 
 # ── TEST 2: Altova extension CALL detection ───────────────────────────────────
@@ -164,10 +176,10 @@ except Exception as exc:
     all_results.append(False)
 
 
-# ── TEST 5: simulate auto-resolves source_file from session ──────────────────
+# ── TEST 5: simulate source_file resolution and provider wiring ──────────────
 print()
 print("=" * 60)
-print("TEST 5: simulate source_file auto-resolution from session")
+print("TEST 5: dispatcher.py simulate-block and provider checks")
 print("=" * 60)
 
 try:
@@ -175,24 +187,24 @@ try:
     src = inspect.getsource(dispatch)
 
     check(
-        "resolved_source variable introduced in simulate block",
-        "resolved_source = source_file" in src,
+        "resolved_source_path used in simulate block",
+        "resolved_source = resolved_source_path" in src,
     )
     check(
-        "session.ingested_files scanned for non-XSLT source files",
-        "_source_types" in src,
+        "Path existence check on resolved_source before simulate()",
+        "Path(resolved_source).exists()" in src,
     )
     check(
-        "D365_XML included in source type set",
-        '"D365_XML"' in src,
-    )
-    check(
-        "Path existence check before using resolved_source",
-        "Path(_fpath).exists()" in src,
-    )
-    check(
-        "resolved_source passed to simulate() not source_file",
+        "resolved_source passed to simulate()",
         "source_file=resolved_source" in src,
+    )
+    check(
+        "provider forwarded to simulate()",
+        "provider=provider" in src,
+    )
+    check(
+        "early-return when no source file is available",
+        '"[simulate] No active source file selected' in src,
     )
 
 except Exception as exc:

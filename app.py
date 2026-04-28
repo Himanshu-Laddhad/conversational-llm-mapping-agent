@@ -136,7 +136,7 @@ _init_state()
 
 # ── Login Gate ────────────────────────────────────────────────────────────────
 
-DEMO_PASSWORD = "partnerlinq2026"
+DEMO_PASSWORD = os.getenv("DEMO_PASSWORD", "partnerlinq2026")
 
 PRESET_USERS = {
     "burhan@partnerlinq.com":   {"name": "Burhan Rasool", "role": "EDI Analyst"},
@@ -1259,6 +1259,15 @@ if user_input:
                 )
             except Exception:
                 pass   # ingest failure is non-fatal; user can still download
+
+            # ── Populate Review tab ───────────────────────────────────────────
+            # before = raw_xml from the original ingested dict (pre-patch)
+            _orig_ing = result.get("ingested")
+            if _orig_ing:
+                _before_raw = (_orig_ing.get("parsed_content") or {}).get("raw_xml", "")
+                st.session_state.review_before_xslt = _before_raw or None
+            st.session_state.review_after_xslt = patched
+            st.session_state.review_rule_key   = download_filename
 
         elif simulate_out and intent == "simulate":
             download_filename = f"{_sid}_transform_output.xml"

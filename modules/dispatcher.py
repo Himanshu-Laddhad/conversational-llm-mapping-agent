@@ -695,6 +695,7 @@ def dispatch(
                     source_file=resolved_source,
                     api_key=api_key,
                     model=resolved_model,
+                    provider=provider or "groq",
                     session=session,
                 )
                 if (response or "").lstrip().startswith("[validation_only]"):
@@ -813,9 +814,19 @@ def dispatch(
                 except Exception as exc:
                     test_readiness_status = f"revision persistence warning: {exc}"
                 responses[intent] = response
-                # Auto-audit: append audit findings to the proposed modification
+                # Auto-audit: run against the patched XSLT when available so
+                # the audit reflects the actual change, not the original file.
+                _audit_ingested = xslt_ingested
+                if patched_xslt:
+                    _audit_ingested = {
+                        **xslt_ingested,
+                        "parsed_content": {
+                            **(xslt_ingested.get("parsed_content") or {}),
+                            "raw_xml": patched_xslt,
+                        },
+                    }
                 _audit_resp, _ = audit(
-                    xslt_ingested,
+                    _audit_ingested,
                     context=response,
                     api_key=api_key,
                     model=resolved_model,

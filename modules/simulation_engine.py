@@ -52,9 +52,6 @@ from pathlib import Path
 from typing import Any, Optional, Tuple, Dict, List
 
 from dotenv import load_dotenv
-from groq import Groq
-
-from modules.usage_tracker import log_usage
 
 # Load .env from module directory or one level up
 _here = Path(__file__).resolve().parent
@@ -444,6 +441,7 @@ def simulate(
     source_file: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    provider: str = "groq",
     session: Optional[Any] = None,
 ) -> Tuple[str, Any]:
     """
@@ -475,13 +473,20 @@ def simulate(
     if "parsed_content" not in ingested:
         raise ValueError("ingested dict is missing 'parsed_content' key")
 
-    key = api_key or os.environ.get("GROQ_API_KEY")
+    try:
+        from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
+    except ImportError:
+        from llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS  # type: ignore
+
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
     if not key:
         raise ValueError(
-            "Groq API key required. Pass api_key= or set GROQ_API_KEY in .env"
+            f"API key required for provider {provider!r}. "
+            "Pass api_key= or set the appropriate key in .env"
         )
 
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
 
     # ── Extract raw XSLT source ───────────────────────────────────────────────
     raw_xslt: Optional[str] = (
@@ -563,28 +568,28 @@ def simulate(
         altova_detected=altova_detected,
     )
 
-    # ── Step 6: Call Groq ─────────────────────────────────────────────────────
-    client = Groq(api_key=key)
-    t0 = time.perf_counter()
+    # ── Step 6: Call LLM via unified client ───────────────────────────────────
     try:
-        response = client.chat.completions.create(
-            model=resolved_model,
+        llm_text = chat_complete(
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user",   "content": user_message},
             ],
+            api_key=key,
+            model=resolved_model,
+            provider=provider,
             temperature=0.2,
             max_tokens=_MAX_OUTPUT_TOKENS,
+            engine="simulate",
         )
     except Exception as exc:  # noqa: BLE001
         if os.getenv("SIM_DEBUG", "0") == "1":
-            print("[SIM_DEBUG] Groq chat.completions.create failed")
+            print(f"[SIM_DEBUG] LLM call failed (provider={provider})")
             print(f"[SIM_DEBUG] processor_used={processor_used}")
             print(f"[SIM_DEBUG] xslt_version={xslt_version}")
             print(f"[SIM_DEBUG] source_file={source_file}")
             print(f"[SIM_DEBUG] xslt_error={xslt_error}")
             traceback.print_exc()
-        # Local-only fallback so demo never hard-fails.
         fallback = generate_local_fallback_response(
             xslt_content=raw_xslt or "",
             source_content=source_xml_text or "",
@@ -592,33 +597,6 @@ def simulate(
         )
         summary = fallback.get("summary", "").strip()
         return f"[validation_only]\n{summary}", None
-    latency_ms = (time.perf_counter() - t0) * 1000
-
-    usage = getattr(response, "usage", None)
-    if usage is not None:
-        log_usage(
-            provider="groq",
-            model=resolved_model,
-            caller="simulation_engine",
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-            total_tokens=usage.total_tokens,
-            max_tokens=_MAX_OUTPUT_TOKENS,
-            temperature=0.2,
-            latency_ms=latency_ms,
-        )
-
-    # Record token usage for simulate engine
-    try:
-        from .token_tracker import get_tracker
-    except ImportError:
-        from token_tracker import get_tracker  # type: ignore
-    try:
-        get_tracker().record(engine="simulate", model=resolved_model, usage=response.usage)
-    except Exception:
-        pass
-
-    llm_text = response.choices[0].message.content.strip()
 
     # Prepend the processor banner so the user always knows what ran
     banner = _build_processor_banner(

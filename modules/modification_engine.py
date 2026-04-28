@@ -319,7 +319,12 @@ def generate_field_variations(description: str) -> list:
 
 
 def semantic_match_confirmed(xml_nodes, user_description: str) -> bool:
-    """Heuristic semantic confirmation of node relevance."""
+    """Heuristic semantic confirmation of node relevance.
+
+    Returns True only when at least one node's tag, name, select, or text
+    contains a token derived from the user description.  Returns False when no
+    node matches so the caller can fall through to the next search strategy.
+    """
     if not xml_nodes:
         return False
     desc_terms = {t.lower() for t in generate_field_variations(user_description)}
@@ -332,8 +337,7 @@ def semantic_match_confirmed(xml_nodes, user_description: str) -> bool:
         ]).lower()
         if any(term and term.lower() in payload for term in desc_terms):
             return True
-    # fallback accept first node when search already constrained
-    return True
+    return False
 
 
 def _extract_location_from_element(element, xslt_content: str) -> dict:
@@ -1584,23 +1588,30 @@ def modify(
                 None,
             )
 
-    # Build candidate blocks from exact located context for precise prompting.
-    candidate_block = "\n".join(
-        [location.get("context_before", ""), location.get("context_after", "")]
-    ).strip()
-    if not candidate_block:
-        # fallback to line window extraction
-        lines = full_raw_xslt.splitlines()
-        ln = int(location.get("line_number", 1))
-        start = max(1, ln - 10)
-        end = min(len(lines), ln + 10)
-        candidate_block = "\n".join(lines[start - 1:end]).rstrip()
-    candidate_blocks = [{
-        "term": "located_element",
-        "start_line": max(1, int(location.get("line_number", 1)) - 10),
-        "end_line": int(location.get("line_number", 1)) + 10,
-        "text": candidate_block,
-    }]
+    # Try the full-XSLT term-based extraction first — this scans the real file
+    # for all occurrences of meaningful tokens from the modification request and
+    # returns up to 5 bounded template blocks.  Fall back to the small context
+    # window from locate_element_in_xslt only when the term scan finds nothing.
+    candidate_blocks, extraction_error = _extract_real_candidate_blocks(
+        full_raw_xslt, modification_request
+    )
+    if extraction_error or not candidate_blocks:
+        # Fallback: use the ±10-line window around the located element.
+        candidate_block = "\n".join(
+            [location.get("context_before", ""), location.get("context_after", "")]
+        ).strip()
+        if not candidate_block:
+            lines = full_raw_xslt.splitlines()
+            ln = int(location.get("line_number", 1))
+            start = max(1, ln - 10)
+            end = min(len(lines), ln + 10)
+            candidate_block = "\n".join(lines[start - 1:end]).rstrip()
+        candidate_blocks = [{
+            "term": "located_element",
+            "start_line": max(1, int(location.get("line_number", 1)) - 10),
+            "end_line": int(location.get("line_number", 1)) + 10,
+            "text": candidate_block,
+        }]
 
     # -- Build LLM user message ------------------------------------------------
     user_message = _build_modify_prompt(
