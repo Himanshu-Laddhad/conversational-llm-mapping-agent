@@ -101,9 +101,7 @@ def _init_state() -> None:
     if "last_route" not in st.session_state:
         st.session_state.last_route = None
     if "llm_provider" not in st.session_state:
-        st.session_state.llm_provider = "groq"
-    if "llm_api_key" not in st.session_state:
-        st.session_state.llm_api_key = os.getenv("GROQ_API_KEY", "")
+        st.session_state.llm_provider = "openai"
     if "review_before_xslt" not in st.session_state:
         st.session_state.review_before_xslt = None
     if "review_after_xslt" not in st.session_state:
@@ -380,11 +378,16 @@ def _test_latest_xslt() -> tuple[Optional[str], Optional[str]]:
     from modules.file_ingestion import ingest_file
     from modules.simulation_engine import simulate
 
+    from modules.llm_client import PROVIDERS as _PROV
+    _sim_provider = st.session_state.get("llm_provider", "openai")
+    _sim_env_key  = _PROV.get(_sim_provider, {}).get("env_key", "OPENAI_API_KEY")
+    _sim_api_key  = os.getenv(_sim_env_key) or os.getenv("OPENAI_API_KEY") or None
+
     latest_ingested = ingest_file(file_path=latest_path)
     response_text, output_xml = simulate(
         latest_ingested,
         source_file=sample_path,
-        api_key=st.session_state.get("llm_api_key") or None,
+        api_key=_sim_api_key,
         model=None,
     )
     return response_text, output_xml
@@ -409,7 +412,7 @@ with st.sidebar:
             reset_session_stats()
             for key in ["logged_in", "current_user", "session", "messages",
                         "active_files", "pending_paths", "audit_dict",
-                        "audit_ingested", "last_route", "llm_provider", "llm_api_key",
+                        "audit_ingested", "last_route", "llm_provider",
                         "active_xslt_file", "active_source_file", "active_target_file"]:
                 st.session_state.pop(key, None)
             st.rerun()
@@ -419,42 +422,39 @@ with st.sidebar:
     from modules.llm_client import PROVIDERS, DEFAULT_MODELS
 
     st.markdown("**LLM Provider**")
-    _provider_options = list(PROVIDERS.keys())
-    _provider_labels  = [PROVIDERS[p]["label"] for p in _provider_options]
-    _current_idx = _provider_options.index(st.session_state.llm_provider) \
-                   if st.session_state.llm_provider in _provider_options else 0
 
-    _selected_label = st.selectbox(
-        "Provider",
-        options=_provider_labels,
-        index=_current_idx,
-        label_visibility="collapsed",
-        key="provider_selectbox",
-    )
-    _selected_provider = _provider_options[_provider_labels.index(_selected_label)]
-    if _selected_provider != st.session_state.llm_provider:
-        # Reset API key when switching providers so user enters the right key
-        import os as _os
-        st.session_state.llm_provider = _selected_provider
-        _env_key = PROVIDERS[_selected_provider].get("env_key", "GROQ_API_KEY")
-        st.session_state.llm_api_key  = _os.getenv(_env_key, "")
-        st.rerun()
+    # Only show providers whose API key is present in the environment.
+    _provider_options = [
+        p for p in PROVIDERS
+        if os.getenv(PROVIDERS[p].get("env_key", ""))
+    ]
+    if not _provider_options:
+        st.warning("No API keys found in `.env`. Add at least one key to use the agent.")
+        st.divider()
+    else:
+        _provider_labels = [PROVIDERS[p]["label"] for p in _provider_options]
 
-    _env_key_name = PROVIDERS[_selected_provider].get("env_key", "GROQ_API_KEY")
-    _api_key_input = st.text_input(
-        "API Key",
-        value=st.session_state.llm_api_key,
-        type="password",
-        placeholder=f"Paste your {_selected_label} key…",
-        label_visibility="collapsed",
-        key="api_key_input",
-    )
-    if _api_key_input != st.session_state.llm_api_key:
-        st.session_state.llm_api_key = _api_key_input
+        # If the previously selected provider lost its key, fall back to the first available.
+        if st.session_state.llm_provider not in _provider_options:
+            st.session_state.llm_provider = _provider_options[0]
 
-    _default_model = DEFAULT_MODELS.get(_selected_provider, "—")
-    st.caption(f"Model: `{_default_model}`")
-    st.divider()
+        _current_idx = _provider_options.index(st.session_state.llm_provider)
+
+        _selected_label = st.selectbox(
+            "Provider",
+            options=_provider_labels,
+            index=_current_idx,
+            label_visibility="collapsed",
+            key="provider_selectbox",
+        )
+        _selected_provider = _provider_options[_provider_labels.index(_selected_label)]
+        if _selected_provider != st.session_state.llm_provider:
+            st.session_state.llm_provider = _selected_provider
+            st.rerun()
+
+        _default_model = DEFAULT_MODELS.get(_selected_provider, "—")
+        st.caption(f"Model: `{_default_model}`")
+        st.divider()
 
     # ── Active file list ───────────────────────────────────────────────────────
     st.markdown("**Files in session**")
@@ -1109,11 +1109,15 @@ with tab_review:
                 else:
                     with st.spinner("Running second-pass verification…"):
                         try:
+                            _af_provider = st.session_state.get("llm_provider", "openai")
+                            from modules.llm_client import PROVIDERS as _AFPROV
+                            _af_env_key  = _AFPROV.get(_af_provider, {}).get("env_key", "OPENAI_API_KEY")
+                            _af_api_key  = os.getenv(_af_env_key) or os.getenv("OPENAI_API_KEY") or None
                             followup, _ = audit_followup(
                                 ingested_ref,
                                 answers,
-                                api_key=st.session_state.get("llm_api_key") or None,
-                                provider=st.session_state.get("llm_provider", "groq"),
+                                api_key=_af_api_key,
+                                provider=_af_provider,
                             )
                         except Exception as ex:
                             followup = f"[ERROR] {ex}"
@@ -1186,8 +1190,11 @@ user_input = st.chat_input("Ask anything about your mapping files…")
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    _active_provider = st.session_state.get("llm_provider", "groq")
-    _active_api_key  = st.session_state.get("llm_api_key", "")
+    _active_provider = st.session_state.get("llm_provider", "openai")
+    # API keys are read exclusively from the .env file — no UI input field.
+    from modules.llm_client import PROVIDERS as _PROVIDERS
+    _env_key_name    = _PROVIDERS.get(_active_provider, {}).get("env_key", "OPENAI_API_KEY")
+    _active_api_key  = os.getenv(_env_key_name) or os.getenv("OPENAI_API_KEY") or ""
 
     with st.spinner("Thinking…"):
         try:

@@ -23,8 +23,9 @@ def explain(
     ingested: dict,
     question: Optional[str] = None,
     api_key: Optional[str] = None,
-    model: str = "llama-3.3-70b-versatile",
-    provider: str = "groq",
+    model: str = "gpt-4.1-mini",
+    provider: str = "openai",
+    xslt_index: Optional[dict] = None,
 ) -> Tuple[str, Any]:
     """
     Explain a parsed file, optionally answering a specific question.
@@ -70,14 +71,19 @@ def explain(
         from file_agent import FileAgent  # type: ignore
         from llm_client import PROVIDERS, DEFAULT_MODELS  # type: ignore
 
-    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
-    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "OPENAI_API_KEY")
+    key = (
+        api_key
+        or os.environ.get(env_key_name)
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("GROQ_API_KEY")
+    )
     if not key:
         raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model if model != "llama-3.3-70b-versatile" else DEFAULT_MODELS.get(provider, model)
+    resolved_model = model if model != "gpt-4.1-mini" else DEFAULT_MODELS.get(provider, model)
     agent = FileAgent(api_key=key, model=resolved_model, provider=provider)
-    response = agent.load_file(ingested)
+    response = agent.load_file(ingested, xslt_index=xslt_index)
 
     if question:
         response = agent.chat(question)

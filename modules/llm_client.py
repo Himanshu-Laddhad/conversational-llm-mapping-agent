@@ -5,8 +5,9 @@ Unified LLM client (Groq, OpenAI, NVIDIA NIM, Anthropic).
 Accepts both caller= and engine= for backward compatibility.
 """
 
+import json
 import time
-from typing import List, Dict, Any, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     from modules.usage_tracker import log_usage as _log_usage
@@ -40,10 +41,38 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
 
 DEFAULT_MODELS: Dict[str, str] = {
     "groq":       "llama-3.3-70b-versatile",
-    "openai":     "gpt-4o-mini",
+    "openai":     "gpt-4.1-mini",
     "nvidia_nim": "meta/llama-3.3-70b-instruct",
     "anthropic":  "claude-3-5-haiku-20241022",
 }
+
+# Per-provider env vars that override DEFAULT_MODELS at runtime.
+_MODEL_ENV_VARS: Dict[str, str] = {
+    "groq":       "GROQ_MODEL",
+    "openai":     "OPENAI_MODEL",
+    "nvidia_nim": "NVIDIA_MODEL",
+    "anthropic":  "ANTHROPIC_MODEL",
+}
+
+
+def get_default_model(provider: str, engine: Optional[str] = None) -> str:
+    """
+    Return the model to use for the given provider and (optionally) engine/intent.
+
+    Resolution order:
+      1. <ENGINE>_MODEL env var     e.g. EXPLAIN_MODEL, MODIFY_MODEL (engine-specific)
+      2. <PROVIDER>_MODEL env var   e.g. OPENAI_MODEL, GROQ_MODEL    (provider-wide)
+      3. DEFAULT_MODELS[provider]   hardcoded fallback
+
+    Engine names match intent names: explain, modify, simulate, audit, generate.
+    """
+    import os as _os
+    if engine:
+        engine_val = _os.getenv(f"{engine.upper()}_MODEL", "")
+        if engine_val:
+            return engine_val
+    provider_val = _os.getenv(_MODEL_ENV_VARS.get(provider, ""), "")
+    return provider_val or DEFAULT_MODELS.get(provider, "gpt-4.1-mini")
 
 
 # ── Public function ────────────────────────────────────────────────────────────
@@ -73,6 +102,156 @@ def chat_complete(
     if provider == "anthropic":
         return _anthropic_complete(messages, api_key, model, max_tokens, engine=_label)
     return _openai_compat_complete(messages, api_key, model, provider, temperature, max_tokens, engine=_label)
+
+
+def chat_complete_with_tools(
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    tool_executor: Callable[[str, dict], dict],
+    api_key: str,
+    model: str,
+    provider: str = "openai",
+    temperature: float = 0.1,
+    max_tokens: int = 4096,
+    max_tool_rounds: int = 10,
+    engine: str = "explain",
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Run an OpenAI-compatible function-calling loop until the model stops
+    issuing tool calls or max_tool_rounds is reached.
+
+    Supported providers: openai, groq, nvidia_nim.
+    Anthropic uses a different tool_use format and raises NotImplementedError.
+
+    Args:
+        messages:       Initial message list (system + user turns).
+        tools:          OpenAI-schema tool definitions list.
+        tool_executor:  Callable(tool_name: str, args: dict) -> dict.
+                        Should be a pure Python function — no LLM calls.
+        api_key:        Provider API key.
+        model:          Model identifier.
+        provider:       One of openai / groq / nvidia_nim.
+        temperature:    Sampling temperature.
+        max_tokens:     Max completion tokens per round.
+        max_tool_rounds: Hard limit on tool-call iterations.
+        engine:         Label for token tracking.
+
+    Returns:
+        (response_text, final_messages) where final_messages includes all
+        intermediate tool call / tool result messages appended in order.
+        Callers can store final_messages directly into conversation history.
+    """
+    if provider == "anthropic":
+        raise NotImplementedError(
+            "chat_complete_with_tools does not support Anthropic — "
+            "use chat_complete() which falls back to the truncated-JSON path."
+        )
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unknown provider {provider!r}. Valid: {list(PROVIDERS)}")
+
+    from openai import OpenAI  # type: ignore
+
+    try:
+        from .token_tracker import get_tracker
+    except ImportError:
+        try:
+            from token_tracker import get_tracker  # type: ignore
+        except ImportError:
+            get_tracker = None
+
+    kwargs: Dict[str, Any] = {"api_key": api_key}
+    base_url = PROVIDERS[provider]["base_url"]
+    if base_url:
+        kwargs["base_url"] = base_url
+
+    client = OpenAI(**kwargs)
+
+    # Work on a mutable copy so the caller's original list is not mutated.
+    msgs = list(messages)
+    last_text = ""
+
+    for _round in range(max_tool_rounds):
+        t0 = time.perf_counter()
+        response = client.chat.completions.create(
+            model=model,
+            messages=msgs,          # type: ignore[arg-type]
+            tools=tools,            # type: ignore[arg-type]
+            tool_choice="auto",
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        latency_ms = (time.perf_counter() - t0) * 1000
+
+        choice = response.choices[0]
+        usage  = getattr(response, "usage", None)
+
+        # Record token usage
+        if get_tracker is not None and usage is not None:
+            try:
+                get_tracker().record(engine=engine, model=model, usage=usage)
+            except Exception:
+                pass
+        if _log_usage is not None and usage is not None:
+            try:
+                _log_usage(
+                    provider=provider,
+                    model=model,
+                    caller=engine,
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    latency_ms=latency_ms,
+                )
+            except Exception:
+                pass
+
+        # No tool calls → model is done
+        if choice.finish_reason != "tool_calls":
+            last_text = (choice.message.content or "").strip()
+            # Append the assistant message to the working list
+            msgs.append({"role": "assistant", "content": last_text})
+            break
+
+        # The model issued one or more tool calls — execute them all
+        assistant_msg = choice.message
+        # Build the assistant message dict preserving tool_calls
+        tc_list = assistant_msg.tool_calls or []
+        msgs.append({
+            "role":       "assistant",
+            "content":    assistant_msg.content,  # may be None
+            "tool_calls": [
+                {
+                    "id":       tc.id,
+                    "type":     "function",
+                    "function": {
+                        "name":      tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in tc_list
+            ],
+        })
+
+        for tc in tc_list:
+            try:
+                args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
+            result = tool_executor(tc.function.name, args)
+            result_str = json.dumps(result, ensure_ascii=False)
+            msgs.append({
+                "role":         "tool",
+                "tool_call_id": tc.id,
+                "content":      result_str,
+            })
+
+    else:
+        # Exceeded max_tool_rounds — return whatever the last assistant text was
+        pass
+
+    return last_text, msgs
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────

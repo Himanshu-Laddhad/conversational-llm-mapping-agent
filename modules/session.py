@@ -108,6 +108,11 @@ class Session:
     active_target_file: Optional[str] = None
     xslt_revisions: List[XSLTRevision] = field(default_factory=list)
 
+    # Per-file XSLT index dicts built by xslt_index.build_xslt_index().
+    # Keyed by the file's metadata.source_path so the dispatcher can look them
+    # up cheaply without re-building on every turn.
+    xslt_indices: dict = field(default_factory=dict)
+
     # ── Public helpers ────────────────────────────────────────────────────────
 
     def add_file(self, ingested_dict: dict) -> None:
@@ -148,7 +153,9 @@ class Session:
         for f in self.ingested_files:
             fname = f.get("metadata", {}).get("filename", "")
             # Split on common separators and score word matches
-            tokens = [t for t in fname.lower().replace("-", "_").split("_") if len(t) > 2]
+            # Include tokens of length >= 2 so short but meaningful EDI identifiers
+            # like "GS", "ST", "N1", or document-type codes ("810") are scored.
+            tokens = [t for t in fname.lower().replace("-", "_").split("_") if len(t) >= 2]
             score  = sum(1 for t in tokens if t in msg_lower)
             if score >= best_score:
                 best, best_score = f, score
@@ -191,6 +198,17 @@ class Session:
             if f.get("metadata", {}).get("source_path", "") == source_path:
                 return f
         return None
+
+    def set_xslt_index(self, source_path: str, index: dict) -> None:
+        """Store a pre-built XSLT index dict for a given file source_path."""
+        if source_path:
+            self.xslt_indices[source_path] = index
+
+    def get_xslt_index(self, source_path: Optional[str]) -> Optional[dict]:
+        """Return the XSLT index for source_path, or None if not yet built."""
+        if not source_path:
+            return None
+        return self.xslt_indices.get(source_path)
 
     def set_role_file(self, role: str, source_path: Optional[str]) -> None:
         """Set a file role path (xslt, source, target)."""
@@ -326,6 +344,7 @@ class Session:
         self.active_source_file = None
         self.active_target_file = None
         self.xslt_revisions = []
+        self.xslt_indices   = {}
 
     # ── Dunder helpers ────────────────────────────────────────────────────────
 

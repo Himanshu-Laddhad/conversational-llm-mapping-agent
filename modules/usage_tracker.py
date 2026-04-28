@@ -49,11 +49,16 @@ _lock = threading.Lock()
 # ── Pricing table (USD per 1 million tokens) ───────────────────────────────────
 # Format: model_id -> (input_per_1M, output_per_1M)
 PRICING: Dict[str, tuple] = {
-    # Current model (Groq)
+    # Groq — Llama models
     "llama-3.3-70b-versatile":       (0.59,  0.79),
-    # OpenAI
+    "llama-3.1-8b-instant":          (0.05,  0.08),
+    # OpenAI — legacy
     "gpt-4o-mini":                   (0.15,  0.60),
     "gpt-4o":                        (2.50, 10.00),
+    # OpenAI — GPT-4.1 family (Apr 2025+)
+    "gpt-4.1":                       (2.00,  8.00),
+    "gpt-4.1-mini":                  (0.40,  1.60),
+    "gpt-4.1-nano":                  (0.10,  0.40),
     # Anthropic
     "claude-3-5-haiku-20241022":     (0.80,  4.00),
     "claude-3-5-sonnet-20241022":    (3.00, 15.00),
@@ -63,13 +68,15 @@ PRICING: Dict[str, tuple] = {
     "qwen2.5-72b-instruct":          (0.90,  0.90),
 }
 
-# Pricing comparison table shown in the UI (5 representative models)
+# Pricing comparison table shown in the UI
 PRICING_COMPARISON = [
-    {"model": "llama-3.3-70b-versatile", "provider": "Groq (current)",  "input_per_1M": 0.59, "output_per_1M": 0.79},
-    {"model": "gpt-4o-mini",             "provider": "OpenAI",           "input_per_1M": 0.15, "output_per_1M": 0.60},
-    {"model": "claude-3-5-haiku",        "provider": "Anthropic",        "input_per_1M": 0.80, "output_per_1M": 4.00},
-    {"model": "qwen2.5-72b-instruct",    "provider": "Qwen (Together)",  "input_per_1M": 0.90, "output_per_1M": 0.90},
-    {"model": "llama-3.3-70b-instruct",  "provider": "Meta (NVIDIA NIM)","input_per_1M": 0.77, "output_per_1M": 0.77},
+    {"model": "gpt-4.1",                  "provider": "OpenAI",           "input_per_1M": 2.00,  "output_per_1M": 8.00},
+    {"model": "gpt-4.1-mini",             "provider": "OpenAI",           "input_per_1M": 0.40,  "output_per_1M": 1.60},
+    {"model": "gpt-4.1-nano",             "provider": "OpenAI",           "input_per_1M": 0.10,  "output_per_1M": 0.40},
+    {"model": "llama-3.3-70b-versatile",  "provider": "Groq",             "input_per_1M": 0.59,  "output_per_1M": 0.79},
+    {"model": "llama-3.1-8b-instant",     "provider": "Groq",             "input_per_1M": 0.05,  "output_per_1M": 0.08},
+    {"model": "claude-3-5-haiku-20241022","provider": "Anthropic",        "input_per_1M": 0.80,  "output_per_1M": 4.00},
+    {"model": "llama-3.3-70b-instruct",   "provider": "Meta (NVIDIA NIM)","input_per_1M": 0.77,  "output_per_1M": 0.77},
 ]
 
 # ── In-memory session accumulator ──────────────────────────────────────────────

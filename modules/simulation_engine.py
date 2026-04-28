@@ -71,6 +71,11 @@ _MAX_XSLT_CHARS = 8_000
 # Max tokens for LLM output.
 _MAX_OUTPUT_TOKENS = 1_500
 
+# ── Partial-match thresholds for compare_output_to_target ────────────────────
+# Tunable via env vars so integration tests can tighten/loosen without a code change.
+_PARTIAL_MATCH_MAX_MISSING    = int(os.getenv("SIM_PARTIAL_MAX_MISSING",    "2"))
+_PARTIAL_MATCH_MAX_MISMATCHES = int(os.getenv("SIM_PARTIAL_MAX_MISMATCHES", "4"))
+
 # Patterns that indicate actual Altova extension FUNCTION CALLS (not just
 # namespace declarations).  Many MapForce XSLTs declare the altova namespace
 # but never invoke it — Saxon handles those fine.  We only bail out when
@@ -209,7 +214,7 @@ def compare_output_to_target(
     if score_penalty == 0:
         status = "matches_target"
         summary = "Output matches target (structure and key fields)."
-    elif len(missing) <= 2 and len(mismatches) <= 4:
+    elif len(missing) <= _PARTIAL_MATCH_MAX_MISSING and len(mismatches) <= _PARTIAL_MATCH_MAX_MISMATCHES:
         status = "partial_match"
         summary = (
             f"Output partially matches target: {len(missing)} missing segment(s), "
@@ -409,8 +414,9 @@ def _try_lxml_transform(
     """
     Attempt an XSLT transformation using lxml (XSLT 1.0 only).
 
-    Returns (output_xml_str, None) on success.
-    Returns (None, error_message)  on failure (e.g. XSLT 2.0 features used).
+    Returns (output_xml_str, None) on success (warnings are non-fatal).
+    Returns (None, error_message)  on failure (e.g. XSLT 2.0 features used,
+    or transform produced no output).
     """
     try:
         from lxml import etree  # type: ignore
@@ -419,13 +425,17 @@ def _try_lxml_transform(
         source_tree = etree.parse(source_path)
         transform   = etree.XSLT(xslt_tree)
         result      = transform(source_tree)
+        output      = str(result) if result is not None else ""
 
-        errors = transform.error_log
-        if errors:
-            msgs = "; ".join(str(e) for e in errors)
-            return None, f"lxml XSLT transform warnings/errors: {msgs}"
+        if not output.strip():
+            # No output produced — report errors or a generic message.
+            errors = transform.error_log
+            msgs = "; ".join(str(e) for e in errors) if errors else "lxml produced empty output"
+            return None, f"lxml transform error: {msgs}"
 
-        return str(result), None
+        # Output was produced; warnings in error_log are non-fatal — return
+        # the output so callers don't unnecessarily fall back to LLM.
+        return output, None
 
     except Exception as exc:  # noqa: BLE001
         if os.getenv("SIM_DEBUG", "0") == "1":
@@ -633,6 +643,7 @@ def generate_local_fallback_response(
     templates = []
     variables = []
     output_elements: List[str] = []
+    parse_ok = False
     try:
         from lxml import etree  # noqa: PLC0415
         parser = etree.XMLParser(remove_blank_text=False, recover=True)
@@ -645,6 +656,7 @@ def generate_local_fallback_response(
                 tag = elem.tag.split("}")[-1] if isinstance(elem.tag, str) and "}" in elem.tag else str(elem.tag)
                 if tag not in output_elements:
                     output_elements.append(tag)
+        parse_ok = True
     except Exception:
         pass
     lower = (xslt_content or "").lower()
@@ -658,32 +670,44 @@ def generate_local_fallback_response(
         tx_note = "SOAP web service transformation"
     else:
         tx_note = "Custom XML transformation"
+
+    # Only show validation checkmarks when lxml actually parsed the file
+    # successfully — avoid false confidence when this fallback was triggered by
+    # a provider API error rather than by a genuine validation run.
+    if parse_ok:
+        validation_section = (
+            "**Validation Checks (lxml parse):**\n"
+            "✅ XSLT is well-formed XML\n"
+            "✅ All xsl: namespace declarations present\n"
+            "✅ Template structure parseable\n"
+        )
+    else:
+        validation_section = (
+            "**Validation Checks:**\n"
+            "⚠️ XSLT structure could not be fully parsed — please review the stylesheet manually.\n"
+        )
+
     summary = (
-        f"✅ XSLT Validation Results\n\n"
+        f"XSLT Validation Results\n\n"
         f"**Transformation Type:** {tx_note}\n\n"
         f"**XSLT Structure Analysis:**\n"
         f"- Templates: {len(templates)} template(s) defined\n"
         f"- Variables: {len(variables)} variable(s) declared\n"
         f"- Output segments: {', '.join(output_elements[:10]) if output_elements else '(not detected)'}\n\n"
-        f"**Validation Checks:**\n"
-        f"✅ XSLT is well-formed XML\n"
-        f"✅ All xsl: namespace declarations present\n"
-        f"✅ Template structure parseable\n"
-        f"✅ Variable references appear consistent\n\n"
-        f"**Note:** Full Saxon transformation unavailable in this environment.\n"
-        f"The XSLT syntax is valid and ready for production testing.\n\n"
+        f"{validation_section}\n"
+        f"**Note:** Full Saxon transformation unavailable in this environment.\n\n"
         f"**Next Steps:**\n"
         f"1. Download the modified XSLT\n"
-        f"2. Test in your EDI system with actual Saxon processor\n"
-        f"3. Verify output against target specification\n\n"
+        f"2. Test in your EDI system with an actual Saxon processor\n"
+        f"3. Verify output against the target specification\n\n"
         f"**Modified Segments in This Version:**\n"
         f"{get_modified_segments_summary(session)}"
     )
     return {
         "status": "validation_only",
-        "message": "✅ XSLT Validation Results",
+        "message": "XSLT Validation Results",
         "summary": summary,
-        "validation_passed": True,
+        "validation_passed": parse_ok,
         "requires_external_testing": True,
     }
 

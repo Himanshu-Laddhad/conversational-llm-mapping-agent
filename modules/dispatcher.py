@@ -184,6 +184,10 @@ def _classify_action(user_message: str) -> str:
         if re.search(pattern, msg_lower):
             return "modify"
 
+    if any(word in msg_lower for word in ["audit", "review this", "check for issues",
+                                           "flag problems", "production ready",
+                                           "what could go wrong", "is anything wrong"]):
+        return "audit"
     if any(word in msg_lower for word in ["simulate", "run", "test", "transform", "execute"]):
         return "simulate"
     if any(word in msg_lower for word in ["explain", "what does", "how does", "describe", "show me"]):
@@ -370,8 +374,6 @@ def dispatch(
     _actor = getattr(session, "session_id", None) if session is not None else None
     _actor = str(_actor) if _actor else "system"
     forced_action = _classify_action(user_message)
-    print(f"[DEBUG] User message: {user_message}")
-    print(f"[DEBUG] Classified action: {forced_action}")
     try:
         from .intent_router import route
         from .file_ingestion import ingest_file
@@ -396,8 +398,20 @@ def dispatch(
     # Reset token tracker for this turn so prior turns don't bleed through
     new_tracker()
 
-    # ── Resolve model (caller > env var > default) ────────────────────────────
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    # ── Resolve model (caller > per-provider env var > built-in default) ────────
+    try:
+        from .llm_client import get_default_model as _gdm
+    except ImportError:
+        from llm_client import get_default_model as _gdm  # type: ignore
+    _prov = provider or "openai"
+    resolved_model = model or _gdm(_prov)
+
+    def _engine_model(engine: str) -> str:
+        """Return the engine-specific model, or fall back to resolved_model."""
+        # If the caller forced a model explicitly, respect that over engine overrides.
+        if model:
+            return model
+        return _gdm(_prov, engine=engine)
 
     # ── 1. Ingest new files ───────────────────────────────────────────────────
     # Merge legacy file_path with new file_paths list, deduplicate
@@ -410,6 +424,19 @@ def dispatch(
             _new = ingest_file(file_path=p)
             if session is not None:
                 session.add_file(_new)
+                # Build XSLT index once at upload time so explain/chat turns
+                # can use the tool-calling path without rebuilding each turn.
+                _new_ft   = (_new.get("metadata") or {}).get("file_type", "")
+                _new_path = (_new.get("metadata") or {}).get("source_path", "")
+                if _new_ft == "XSLT" and _new_path:
+                    try:
+                        from .xslt_index import build_xslt_index as _bxi
+                    except ImportError:
+                        from xslt_index import build_xslt_index as _bxi  # type: ignore
+                    session.set_xslt_index(_new_path, _bxi(_new))
+                    # Auto-assign XSLT role on first upload if none is set yet
+                    if session.get_role_file("xslt") is None:
+                        session.set_role_file("xslt", _new_path)
             ingested = _new   # last ingested = primary for this turn
 
     # Resolve explicit role paths from caller/session.
@@ -505,13 +532,15 @@ def dispatch(
     # Direct compare mode for side-by-side XSLT comparison.
     if _is_compare_xslt_request(user_message) and session is not None:
         if len(session.xslt_revisions) >= 2:
-            rev_old = session.xslt_revisions[0]
+            # Default: compare the two most recent consecutive revisions so the
+            # diff reflects the latest change, not the entire history.
+            rev_old = session.xslt_revisions[-2]
             rev_new = session.xslt_revisions[-1]
             rev_comp = session.compare_revisions(rev_old.id, rev_new.id)
             comp_text = (
                 "## XSLT Revision Comparison\n"
                 f"{rev_comp.get('summary', '')}\n"
-                f"Original: `{rev_old.timestamp}` | Latest: `{rev_new.timestamp}`"
+                f"Previous: `{rev_old.timestamp}` | Latest: `{rev_new.timestamp}`"
             )
             return {
                 "route": {"scores": {}, "active_intents": ["compare"], "primary": "compare", "is_multi": False, "threshold_used": 0.45},
@@ -580,14 +609,14 @@ def dispatch(
                 "primary_file_name": xslt_files[-1].get("metadata", {}).get("filename", ""),
             }
 
-    if forced_action in {"modify", "simulate", "explain", "generate"}:
+    if forced_action in {"modify", "simulate", "explain", "generate", "audit"}:
         route_result = {
             "scores": {
-                "explain": 1.0 if forced_action == "explain" else 0.0,
+                "explain":  1.0 if forced_action == "explain"  else 0.0,
                 "generate": 1.0 if forced_action == "generate" else 0.0,
-                "modify": 1.0 if forced_action == "modify" else 0.0,
+                "modify":   1.0 if forced_action == "modify"   else 0.0,
                 "simulate": 1.0 if forced_action == "simulate" else 0.0,
-                "audit": 0.0,
+                "audit":    1.0 if forced_action == "audit"    else 0.0,
             },
             "reasoning": {"forced": "pattern classifier"},
             "active_intents": [forced_action],
@@ -596,7 +625,24 @@ def dispatch(
             "threshold_used": 0.45,
         }
     else:
-        route_result = route(user_message, api_key=api_key)
+        # Intent routing always uses Groq (llama-3.1-8b-instant) for speed and cost
+        # efficiency — classification doesn't require the stronger OpenAI models.
+        # Fall back to the active provider's key if no Groq key is configured.
+        _groq_key = os.getenv("GROQ_API_KEY")
+        if _groq_key:
+            route_result = route(
+                user_message,
+                api_key=_groq_key,
+                provider="groq",
+                model=os.getenv("INTENT_ROUTER_MODEL", "llama-3.1-8b-instant"),
+            )
+        else:
+            route_result = route(
+                user_message,
+                api_key=api_key,
+                provider=provider or "openai",
+                model=os.getenv("INTENT_ROUTER_MODEL"),
+            )
 
     # ── 6. Dispatch to each active engine in priority order ───────────────────
     responses: Dict[str, str] = {}
@@ -646,6 +692,10 @@ def dispatch(
                 )
                 responses[intent] = response
             else:
+                _xidx = (
+                    session.get_xslt_index(resolved_xslt_path)
+                    if session is not None else None
+                )
                 response, agent = explain(
                     xslt_ingested,
                     question=_build_explain_prompt_with_roles(
@@ -654,7 +704,9 @@ def dispatch(
                         target_ingested=target_ingested,
                     ),
                     api_key=api_key,
-                    model=resolved_model,
+                    model=_engine_model("explain"),
+                    provider=provider or "openai",
+                    xslt_index=_xidx,
                 )
                 responses[intent] = response
             modify_file_used = (xslt_ingested or {}).get("metadata", {}).get("filename", "")
@@ -694,8 +746,8 @@ def dispatch(
                     simulate_ingested,
                     source_file=resolved_source,
                     api_key=api_key,
-                    model=resolved_model,
-                    provider=provider or "groq",
+                    model=_engine_model("simulate"),
+                    provider=provider or "openai",
                     session=session,
                 )
                 if (response or "").lstrip().startswith("[validation_only]"):
@@ -746,7 +798,8 @@ def dispatch(
                     xslt_ingested,
                     modification_request=msg,
                     api_key=api_key,
-                    model=resolved_model,
+                    model=_engine_model("modify"),
+                    provider=provider or "openai",
                 )
                 modify_guidance = extract_modify_guidance(response)
                 if modify_guidance.get("status"):
@@ -829,7 +882,7 @@ def dispatch(
                     _audit_ingested,
                     context=response,
                     api_key=api_key,
-                    model=resolved_model,
+                    model=_engine_model("audit"),
                 )
                 responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
 
@@ -837,9 +890,9 @@ def dispatch(
             msg = _ctx_prefix + user_message
             response, generated_xslt = generate(
                 generation_request=msg,
-                source_sample=source_file,
+                source_sample=resolved_source_path,
                 api_key=api_key,
-                model=resolved_model,
+                model=_engine_model("generate"),
             )
             responses[intent] = response
             # After generate, register the new XSLT in the session so that
@@ -866,7 +919,7 @@ def dispatch(
                     xslt_ingested,
                     context=response,
                     api_key=api_key,
-                    model=resolved_model,
+                    model=_engine_model("audit"),
                 )
                 responses[intent] += f"\n\n---\n## AUTO-AUDIT\n{_audit_resp}"
 
@@ -879,7 +932,7 @@ def dispatch(
                 response, audit_dict = audit(
                     xslt_ingested,
                     api_key=api_key,
-                    model=resolved_model,
+                    model=_engine_model("audit"),
                 )
                 responses[intent] = response
                 modify_file_used = (xslt_ingested or {}).get("metadata", {}).get("filename", "")
@@ -997,7 +1050,11 @@ def dispatch_folder(
     except ImportError:
         from rag_engine import index_folder, query_folder  # type: ignore
 
-    resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    try:
+        from .llm_client import get_default_model as _gdm
+    except ImportError:
+        from llm_client import get_default_model as _gdm  # type: ignore
+    resolved_model = model or _gdm(provider or "openai")
 
     index_result = index_folder(
         folder_path=folder_path,
@@ -1064,12 +1121,19 @@ if __name__ == "__main__":
                 print("\nGoodbye!\n")
                 break
 
-            # If agent already loaded from a previous explain, use it directly
+            # If agent already loaded from a previous explain, use it for
+            # conversational follow-ups.  When the user types an action keyword
+            # (modify/simulate/audit/generate) fall through to full dispatch so
+            # the right engine is used.
             if current_agent is not None:
-                reply = current_agent.chat(user_input)
-                print(f"\nAgent: {reply}\n")
-                print("-" * 80 + "\n")
-                continue
+                _cli_action = _classify_action(user_input)
+                if _cli_action not in {"modify", "simulate", "generate", "audit"}:
+                    reply = current_agent.chat(user_input)
+                    print(f"\nAgent: {reply}\n")
+                    print("-" * 80 + "\n")
+                    continue
+                # Action keyword detected — reset agent and dispatch normally
+                current_agent = None
 
             # First message — run full dispatch
             result = dispatch(

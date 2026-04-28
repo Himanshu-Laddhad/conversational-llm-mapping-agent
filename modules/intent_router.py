@@ -27,6 +27,7 @@ Usage (standalone test):
 import os
 import json
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
@@ -138,9 +139,9 @@ ALL_INTENTS = list(INTENT_META.keys())
 
 def route(
     user_message: str,
-    api_key: str = None,
+    api_key: Optional[str] = None,
     provider: str = "groq",
-    model: str = None,
+    model: Optional[str] = None,
     threshold: float = THRESHOLD,
 ) -> dict:
     """
@@ -167,11 +168,16 @@ def route(
     """
     from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
     env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
-    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
+    key = (
+        api_key
+        or os.environ.get(env_key_name)
+        or os.environ.get("GROQ_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+    )
     if not key:
         raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or MODEL or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
+    resolved_model = model or MODEL or DEFAULT_MODELS.get(provider, "llama-3.1-8b-instant")
 
     try:
         raw = chat_complete(
@@ -187,12 +193,14 @@ def route(
             engine="intent_router",
         )
 
-        # Strip markdown fences if present
+        # Strip leading/trailing whitespace before checking for markdown fences
+        # so a newline before ``` doesn't defeat the detection.
+        raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        raw = raw.strip()
+            raw = raw.strip()
 
         parsed = json.loads(raw)
         scores    = parsed.get("scores", {})

@@ -1347,7 +1347,7 @@ def apply_patch(
     """
     if not before_block:
         return raw_xslt, False, "BEFORE block is empty -- nothing to locate in the file."
-    if not after_block and after_block != "":
+    if after_block is None:
         return raw_xslt, False, "AFTER block is missing."
 
     # Strategy 1: exact match
