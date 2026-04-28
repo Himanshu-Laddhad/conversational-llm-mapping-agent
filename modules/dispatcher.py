@@ -381,6 +381,7 @@ def dispatch(
         from .xslt_generator import generate
         from .audit_engine import audit
         from .rag_engine import query_folder
+        from .token_tracker import new_tracker, get_tracker
     except ImportError:
         from intent_router import route          # fallback for standalone execution
         from file_ingestion import ingest_file
@@ -390,6 +391,10 @@ def dispatch(
         from xslt_generator import generate
         from audit_engine import audit           # type: ignore
         from rag_engine import query_folder      # type: ignore
+        from token_tracker import new_tracker, get_tracker  # type: ignore
+
+    # Reset token tracker for this turn so prior turns don't bleed through
+    new_tracker()
 
     # ── Resolve model (caller > env var > default) ────────────────────────────
     resolved_model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -917,6 +922,7 @@ def dispatch(
         "modify_guidance": modify_guidance,
         "session":            session,
         "primary_file_name":  _primary_file_name,
+        "token_usage":        get_tracker().summary(),
     }
 
     _audit_log_event(

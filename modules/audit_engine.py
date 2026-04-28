@@ -693,6 +693,7 @@ def audit(
         provider=provider,
         temperature=0.1,
         max_tokens=_MAX_OUTPUT_TOKENS,
+        engine="audit",
     )
 
     # Strip the QUESTIONS_JSON block from the displayed prose report
@@ -809,6 +810,7 @@ def audit_followup(
         provider=provider,
         temperature=0.1,
         max_tokens=_MAX_FOLLOWUP_TOKENS,
+        engine="audit",
     ), None
 
 

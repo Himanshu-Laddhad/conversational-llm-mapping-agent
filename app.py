@@ -124,6 +124,12 @@ def _init_state() -> None:
         st.session_state.test_readiness_status = ""
     if "queued_user_prompt" not in st.session_state:
         st.session_state.queued_user_prompt = None
+    if "token_stats" not in st.session_state:
+        try:
+            from modules.token_tracker import empty_session_stats
+            st.session_state.token_stats = empty_session_stats()
+        except Exception:
+            st.session_state.token_stats = {}
 
 
 _init_state()
@@ -607,6 +613,8 @@ with st.sidebar:
         st.session_state.audit_dict     = None
         st.session_state.audit_ingested = None
         st.session_state.last_route     = None
+        from modules.token_tracker import empty_session_stats
+        st.session_state.token_stats    = empty_session_stats()
         st.rerun()
     st.divider()
 
@@ -617,6 +625,29 @@ with st.sidebar:
         key="reviewer_name",
         placeholder="e.g. Annabelle",
     )
+
+    # ── Token Usage Stats ──────────────────────────────────────────────────────
+    _ts = st.session_state.get("token_stats", {})
+    _total_tok = _ts.get("total_tokens", 0)
+    with st.expander(f"📊 Token Usage — {_total_tok:,} tokens", expanded=(_total_tok > 0)):
+        if _total_tok == 0:
+            st.caption("No LLM calls yet this session.")
+        else:
+            _calls = _ts.get("total_calls", 0)
+            _prompt = _ts.get("total_prompt_tokens", 0)
+            _comp   = _ts.get("total_completion_tokens", 0)
+            col1, col2 = st.columns(2)
+            col1.metric("Total Tokens", f"{_total_tok:,}")
+            col2.metric("LLM Calls", _calls)
+            col1.metric("Prompt Tokens", f"{_prompt:,}")
+            col2.metric("Output Tokens", f"{_comp:,}")
+            st.markdown("**By Engine**")
+            _engine_icons = {"explain":"🔍","simulate":"⚙️","modify":"✏️","audit":"🛡️","generate":"🏗️","intent_router":"🧭","unknown":"❓"}
+            for _eng, _estats in sorted(_ts.get("by_engine", {}).items()):
+                _icon = _engine_icons.get(_eng, "•")
+                st.markdown(f"{_icon} **{_eng.capitalize()}** — `{_estats.get('total_tokens',0):,}` tokens · {_estats.get('calls',0)} calls")
+
+    st.divider()
 
     # ── Debug expander ─────────────────────────────────────────────────────────
     with st.expander("Debug — last route", expanded=False):
@@ -824,219 +855,6 @@ with tab_chat:
                     use_container_width=False,
                     key=f"dl_{_msg_idx}",
                 )
-
-    st.divider()
-
-    # ── Attachment popover (compact file upload near the chat input) ───────────
-    # Capture the uploader return value OUTSIDE the popover context so that
-    # st.rerun() is never called from inside the popover block.
-    _inline_uploads = None
-    with st.popover("📎 Attach files", use_container_width=False):
-        st.caption("Upload mapping files to use in the chat.")
-        _inline_uploads = st.file_uploader(
-            "Attach files",
-            type=["xml", "xsl", "xslt", "xsd", "edi", "txt"],
-            accept_multiple_files=True,
-            key="inline_uploader",
-            label_visibility="collapsed",
-        )
-
-    # Process new inline uploads AFTER the popover context has closed.
-    if _inline_uploads:
-        _known = _active_file_names()
-        _new_inline = [f for f in _inline_uploads if f.name not in _known]
-        if _new_inline:
-            for _uf in _new_inline:
-                _saved = _save_upload(_uf)
-                st.session_state.active_files.append({"name": _uf.name, "path": _saved})
-                try:
-                    _ing = ingest_file(file_path=_saved)
-                    st.session_state.session.add_file(_ing)
-                    _ftype = _ing.get("metadata", {}).get("file_type", "")
-                    if _ftype == "XSLT":
-                        if not st.session_state.active_xslt_file:
-                            st.session_state.active_xslt_file = _saved
-                    else:
-                        if not st.session_state.active_source_file:
-                            st.session_state.active_source_file = _saved
-                        elif (
-                            not st.session_state.active_target_file
-                            and st.session_state.active_source_file != _saved
-                        ):
-                            st.session_state.active_target_file = _saved
-                except Exception:
-                    st.session_state.pending_paths.append(_saved)
-            _sync_role_paths_to_session()
-            st.rerun()
-
-    # ── Chat input ─────────────────────────────────────────────────────────────
-    user_input = st.chat_input("Ask anything about your mapping files…")
-    if not user_input and st.session_state.get("queued_user_prompt"):
-        user_input = st.session_state.queued_user_prompt
-        st.session_state.queued_user_prompt = None
-
-    if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
-
-        _active_provider = st.session_state.get("llm_provider", "groq")
-        _active_api_key  = st.session_state.get("llm_api_key", "")
-
-        with st.spinner("Thinking…"):
-            try:
-                result = dispatch(
-                    user_message=user_input,
-                    file_paths=st.session_state.pending_paths,
-                    session=st.session_state.session,
-                    source_file=st.session_state.get("active_source_file"),
-                    target_file=st.session_state.get("active_target_file"),
-                    active_xslt_file=st.session_state.get("active_xslt_file"),
-                    active_source_file=st.session_state.get("active_source_file"),
-                    active_target_file=st.session_state.get("active_target_file"),
-                    provider=_active_provider,
-                    api_key=_active_api_key or None,
-                )
-                dispatch_error = None
-            except Exception as ex:
-                result        = None
-                dispatch_error = str(ex)
-
-        # Clear pending paths — session now owns the ingested dicts
-        st.session_state.pending_paths = []
-
-        download_xslt     = None   # type: Optional[str]
-        download_filename = None   # type: Optional[str]
-        download_label    = None   # type: Optional[str]
-
-        if result is None:
-            response_text = f"⚠️ Error: {dispatch_error}"
-            intent        = "error"
-            file_used     = ""
-        else:
-            response_text = result["primary_response"] or "_No response generated._"
-            intent        = result["route"].get("primary", "unknown")
-            file_used     = result.get("modify_file_used") or result.get("primary_file_name", "")
-            st.session_state.last_route = result["route"]
-
-            # ── Capture XSLT for review tab (generate / modify) ────────────────
-            ing = result.get("ingested") or {}
-            before = None
-            try:
-                before = (ing.get("parsed_content") or {}).get("raw_xml")
-            except Exception:
-                before = None
-            extracted = None
-            if intent == "generate":
-                extracted = _extract_xml_fence(response_text)
-            elif intent == "modify":
-                extracted = result.get("patched_xslt")
-            if extracted:
-                st.session_state.review_before_xslt = before
-                st.session_state.review_after_xslt  = extracted
-                st.session_state.review_rule_key    = file_used or "generated_xslt"
-                st.session_state.latest_test_result = None
-                st.session_state.latest_test_output = None
-
-            # Structured comparison + revision metadata (modify intent)
-            if result.get("comparison_data"):
-                comp = result["comparison_data"]
-                st.session_state.review_before_xslt = comp.get("old_xslt") or st.session_state.review_before_xslt
-                st.session_state.review_after_xslt  = comp.get("new_xslt") or st.session_state.review_after_xslt
-                summary_parts = []
-                if result.get("change_summary"):
-                    summary_parts.append(str(result["change_summary"]))
-                if comp.get("summary"):
-                    summary_parts.append(str(comp["summary"]))
-                st.session_state.comparison_summary = " | ".join(summary_parts)
-            else:
-                st.session_state.comparison_summary = result.get("change_summary", "") or ""
-
-            st.session_state.latest_version_path   = result.get("latest_version_path", "") or ""
-            st.session_state.test_readiness_status = result.get("test_readiness_status", "") or ""
-
-            if result.get("audit_dict") is not None:
-                st.session_state.audit_dict     = result["audit_dict"]
-                st.session_state.audit_ingested = result.get("ingested")
-
-            # ── Auto-ingest patched/generated XSLT back into session ──────────
-            # dispatcher already updated the session for generate; for modify
-            # we sync here so that the sidebar chip and next-turn ingested both
-            # point to the new file.
-            patched      = result.get("patched_xslt")
-            generated    = result.get("generated_xslt")
-            simulate_out = result.get("simulate_output")
-            _sid         = st.session_state.session.session_id
-
-            if patched and intent == "modify":
-                _raw_orig = result.get("primary_file_name", "mapping.xml")
-                if _raw_orig.startswith(_sid + "_"):
-                    _orig_display = _raw_orig[len(_sid) + 1:]
-                else:
-                    _orig_display = _raw_orig
-                _stem             = _orig_display.rsplit(".", 1)[0] if "." in _orig_display else _orig_display
-                _new_display      = f"{_stem}_patched.xml"
-                download_filename = f"{_sid}_{_new_display}"
-                download_label    = f"Download {_new_display}"
-                download_xslt     = patched
-                try:
-                    _ingest_and_update_session(
-                        patched,
-                        download_filename,
-                        original_name=_raw_orig,
-                        chip_name=_orig_display,
-                    )
-                except Exception:
-                    pass
-
-            elif simulate_out and intent == "simulate":
-                download_filename = f"{_sid}_transform_output.xml"
-                download_label    = "Download transform output (XML)"
-                download_xslt     = simulate_out
-
-            elif generated and intent == "generate":
-                download_filename = f"{_sid}_generated.xml"
-                download_label    = "Download generated XSLT"
-                download_xslt     = generated
-                # Strip the ```xml ... ``` fence from chat — it goes into the
-                # download. dispatcher already ingested the file into session.
-                response_text = _re.sub(
-                    r"```xml[\s\S]*?```",
-                    "_Full XSLT is available via the download button below._",
-                    response_text,
-                    count=1,
-                )
-                # Sync sidebar chip — dispatcher wrote the file; just add chip.
-                _gen_display = "generated.xml"
-                if not any(af["name"] == _gen_display for af in st.session_state.active_files):
-                    _gen_path = (
-                        Path(__file__).resolve().parent / "data" / "uploads"
-                        / f"{_sid}_generated.xml"
-                    )
-                    st.session_state.active_files.append(
-                        {"name": _gen_display, "path": str(_gen_path)}
-                    )
-
-        st.session_state.messages.append({
-            "role":              "assistant",
-            "content":           response_text,
-            "intent":            intent,
-            "file_used":         file_used,
-            "source_file_used":  result.get("source_file_used", "") if result else "",
-            "target_file_used":  result.get("target_file_used", "") if result else "",
-            "target_match_status": result.get("target_match_status", "") if result else "",
-            "target_match_summary": result.get("target_match_summary", "") if result else "",
-            "status": result.get("status", "") if result else "",
-            "missing_target_segments": result.get("missing_target_segments", []) if result else [],
-            "extra_output_segments": result.get("extra_output_segments", []) if result else [],
-            "mismatched_fields": result.get("mismatched_fields", []) if result else [],
-            "autofix_suggestions": result.get("autofix_suggestions", []) if result else [],
-            "xslt_compare_data": result.get("xslt_compare_data", None) if result else None,
-            "modify_status": result.get("modify_status", "") if result else "",
-            "modify_guidance": result.get("modify_guidance", {}) if result else {},
-            "download_xslt":     download_xslt,
-            "download_filename": download_filename,
-            "download_label":    download_label,
-        })
-        st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — REVIEW & DIFF
@@ -1324,3 +1142,153 @@ with tab_review:
                 st.session_state.audit_dict     = None
                 st.session_state.audit_ingested = None
                 st.rerun()
+
+
+# ── Attachment popover (compact file upload near the chat input) ───────────────
+# Capture the uploader return value OUTSIDE the popover context so that
+# st.rerun() is never called from inside the popover block.  Calling rerun
+# from inside a with-st.popover() raises StopException before the context
+# manager exits cleanly, which silently discards any session_state changes
+# made inside the block.
+_inline_uploads = None
+with st.popover("📎 Attach files", use_container_width=False):
+    st.caption("Upload mapping files to use in the chat.")
+    _inline_uploads = st.file_uploader(
+        "Attach files",
+        type=["xml", "xsl", "xslt", "xsd", "edi", "txt"],
+        accept_multiple_files=True,
+        key="inline_uploader",
+        label_visibility="collapsed",
+    )
+
+# Process new inline uploads AFTER the popover context has closed.
+# We ingest immediately here so the file is available to the agent
+# even before the user sends their first message.  pending_paths is
+# used as a fallback only when ingest itself fails.
+if _inline_uploads:
+    _known = _active_file_names()
+    _new_inline = [f for f in _inline_uploads if f.name not in _known]
+    if _new_inline:
+        for _uf in _new_inline:
+            _saved = _save_upload(_uf)
+            st.session_state.active_files.append({"name": _uf.name, "path": _saved})
+            try:
+                _ing = ingest_file(file_path=_saved)
+                st.session_state.session.add_file(_ing)
+            except Exception:
+                # Ingest failed — queue for dispatch as a safe fallback
+                st.session_state.pending_paths.append(_saved)
+        st.rerun()
+
+# ── Chat input ─────────────────────────────────────────────────────────────────
+user_input = st.chat_input("Ask anything about your mapping files…")
+
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    _active_provider = st.session_state.get("llm_provider", "groq")
+    _active_api_key  = st.session_state.get("llm_api_key", "")
+
+    with st.spinner("Thinking…"):
+        try:
+            result = dispatch(
+                user_message=user_input,
+                file_paths=st.session_state.pending_paths,
+                session=st.session_state.session,
+                provider=_active_provider,
+                api_key=_active_api_key or None,
+            )
+            dispatch_error = None
+        except Exception as ex:
+            result        = None
+            dispatch_error = str(ex)
+
+    # Clear pending paths — session now owns the ingested dicts
+    st.session_state.pending_paths = []
+
+    download_xslt     = None   # type: Optional[str]
+    download_filename = None   # type: Optional[str]
+    download_label    = None   # type: Optional[str]
+
+    if result is None:
+        response_text = f"⚠️ Error: {dispatch_error}"
+        intent        = "error"
+        file_used     = ""
+    else:
+        response_text = result["primary_response"] or "_No response generated._"
+        intent        = result["route"].get("primary", "unknown")
+        file_used     = result.get("primary_file_name", "")
+        st.session_state.last_route = result["route"]
+
+        # ── Merge token usage into session-level stats ────────────────────────
+        _turn_usage = result.get("token_usage")
+        if _turn_usage:
+            from modules.token_tracker import merge_into_session
+            merge_into_session(st.session_state.token_stats, _turn_usage)
+
+        if result.get("audit_dict") is not None:
+            st.session_state.audit_dict     = result["audit_dict"]
+            st.session_state.audit_ingested = result.get("ingested")
+
+        # ── Auto-ingest patched/generated XSLT back into session ─────────────
+
+        patched          = result.get("patched_xslt")
+        generated        = result.get("generated_xslt")
+        simulate_out     = result.get("simulate_output")
+        _sid             = st.session_state.session.session_id
+
+        if patched and intent == "modify":
+            # raw_orig is the metadata filename (includes session-id prefix)
+            _raw_orig = result.get("primary_file_name", "mapping.xml")
+            # Strip session-id prefix to get a clean display name
+            if _raw_orig.startswith(_sid + "_"):
+                _orig_display = _raw_orig[len(_sid) + 1:]
+            else:
+                _orig_display = _raw_orig
+            _stem             = _orig_display.rsplit(".", 1)[0] if "." in _orig_display else _orig_display
+            _new_display      = f"{_stem}_patched.xml"
+            download_filename = f"{_sid}_{_new_display}"
+            download_label    = f"Download {_new_display}"
+            download_xslt     = patched
+            try:
+                _ingest_and_update_session(
+                    patched,
+                    download_filename,
+                    original_name=_raw_orig,    # metadata filename for session lookup
+                    chip_name=_orig_display,    # display name for chip update
+                )
+            except Exception:
+                pass   # ingest failure is non-fatal; user can still download
+
+        elif simulate_out and intent == "simulate":
+            download_filename = f"{_sid}_transform_output.xml"
+            download_label    = "Download transform output (XML)"
+            download_xslt     = simulate_out
+
+        elif generated and intent == "generate":
+            download_filename = f"{_sid}_generated.xml"
+            download_label    = "Download generated XSLT"
+            download_xslt     = generated
+            # Strip the full ```xml ... ``` block from the chat message — it goes
+            # into the download, not the conversation.  Keep the prose description.
+            response_text = _re.sub(
+                r"```xml[\s\S]*?```",
+                "_Full XSLT is available via the download button below._",
+                response_text,
+                count=1,
+            )
+            try:
+                _ingest_and_update_session(generated, download_filename, original_name=None)
+            except Exception:
+                pass
+
+    st.session_state.messages.append({
+        "role":              "assistant",
+        "content":           response_text,
+        "intent":            intent,
+        "file_used":         file_used,
+        "download_xslt":     download_xslt,
+        "download_filename": download_filename,
+        "download_label":    download_label,
+    })
+    st.rerun()

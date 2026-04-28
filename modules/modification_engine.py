@@ -1621,6 +1621,7 @@ def modify(
         provider=provider,
         temperature=0.1,
         max_tokens=_MAX_OUTPUT_TOKENS,
+        engine="modify",
     )
 
     # -- Parse the proposed patch ----------------------------------------------

@@ -241,6 +241,7 @@ def generate(
         provider=provider,
         temperature=0.2,
         max_tokens=_MAX_OUTPUT_TOKENS,
+        engine="generate",
     )
 
     # Extract the raw XSLT from the ```xml ... ``` fence the LLM is instructed

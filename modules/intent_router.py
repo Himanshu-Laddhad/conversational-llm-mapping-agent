@@ -184,6 +184,7 @@ def route(
             provider=provider,
             temperature=0.0,
             max_tokens=250,
+            engine="intent_router",
         )
 
         # Strip markdown fences if present

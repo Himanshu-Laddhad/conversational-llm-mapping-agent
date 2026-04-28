@@ -608,6 +608,16 @@ def simulate(
             latency_ms=latency_ms,
         )
 
+    # Record token usage for simulate engine
+    try:
+        from .token_tracker import get_tracker
+    except ImportError:
+        from token_tracker import get_tracker  # type: ignore
+    try:
+        get_tracker().record(engine="simulate", model=resolved_model, usage=response.usage)
+    except Exception:
+        pass
+
     llm_text = response.choices[0].message.content.strip()
 
     # Prepend the processor banner so the user always knows what ran
