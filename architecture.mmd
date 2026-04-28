@@ -1,128 +1,136 @@
 %% PartnerLinQ — Conversational Mapping Intelligence Agent
-%% Updated architecture reflecting: unified chat, multi-file sessions, auto-RAG, audit engine
+%% High-level system architecture with request lifecycle sub-diagram
 
 flowchart TB
+
+    %% ── SYSTEM OVERVIEW ────────────────────────────────────────────────────
+
     subgraph USER["USER & INTERFACE"]
-        U[["👤 User<br/>Business or IT stakeholder"]]
-        UI[["🖥️ Streamlit UI<br/>app.py<br/>Chat, multi-file upload, output panel, audit form"]]
+        U[["👤 User\nBusiness or IT stakeholder"]]
+        UI[["🖥️ Streamlit UI\napp.py\nChat, multi-file upload,\noutput panel, audit form,\ndownload button"]]
     end
 
     subgraph PARTNERLINQ["PARTNERLINQ DATA"]
-        PD[["📁 Partner Data<br/>data/ — XSLT, XML, XSD, EDI mappings"]]
-        RAG[["🔍 .rag_index/<br/>ChromaDB vector store<br/>Built via scripts/index_data.py"]]
+        PD[["📁 Partner Data\ndata/ — XSLT, XML, XSD,\nEDI, D365 XML mappings\n(git-ignored)"]]
+        RAG[["🔍 .rag_index/\nChromaDB vector store\nBuilt via scripts/index_data.py\n(optional — graceful skip if absent)"]]
     end
 
-    subgraph CORE["CORE"]
-        IR[["🧭 Intent Router<br/>Classifies: explain, simulate, modify, generate, audit"]]
-        FI[["📥 File Ingestion<br/>Parses mappings per file type"]]
-        CB[["🧩 Context Builder<br/>Session history + RAG snippets + file context"]]
-        DISP[["⚙️ Dispatcher<br/>Central orchestration hub"]]
+    subgraph INGESTION["FILE INGESTION"]
+        FI[["📥 file_ingestion.py\nDetects & parses:\n X12 EDI · EDIFACT\n D365_XML · X12_XML\n XSLT · XSD · XML"]]
+        XIDX[["🗂️ xslt_index.py\nIn-memory XSLT index\nbuilt at upload time\n(templates, variables,\n segment_map, raw_xml)\n\nExposes 5 tool functions\nfor LLM exploration"]]
     end
 
-    subgraph CAPABILITY["CAPABILITY"]
-        EXP[["📋 Explain<br/>Translate mapping logic to plain language"]]
-        SIM[["▶️ Simulate<br/>Preview before/after transformation impact"]]
-        MOD[["✏️ Modify<br/>Edit rules with LLM-assisted changes"]]
-        GEN[["🔧 Generate<br/>Create new XSLT/mappings from specs"]]
-        AUD[["✅ Audit<br/>Production readiness checks + verification form"]]
+    subgraph CORE["CORE ROUTING"]
+        IR[["🧭 intent_router.py\nGroq llama-3.1-8b-instant\nClassifies: explain,\nsimulate, modify,\ngenerate, audit, folder\n\nFallback → OpenAI\nif no GROQ_API_KEY"]]
+        SESS[["💾 session.py\nConversation memory\ningested_files list\nxslt_indices dict\nturn history"]]
+        CB[["🧩 Context Builder\ndispatcher.py\nSession history +\nRAG snippets +\nxslt_index ref"]]
+        DISP[["⚙️ dispatcher.py\nCentral orchestration hub\nResolves per-engine models\nfrom env vars"]]
     end
 
-    subgraph GOVERNANCE["GOVERNANCE & STORAGE"]
-        SESS[["💾 Session<br/>Conversation memory, ingested_files, turn history"]]
-        AUDV[["📋 Audit & Verification<br/>Structured questions, SAFE/REVIEW/DO NOT DEPLOY verdict"]]
+    subgraph CAPABILITY["CAPABILITY ENGINES"]
+        EXP[["📋 Explain\ngroq_agent.py\nTool-calling explore +\nOpenAI gpt-4.1-mini\nor legacy single-context"]]
+        SIM[["▶️ Simulate\nsimulation_engine.py\nSaxon-HE → lxml →\nLLM cascade\n(gpt-4.1-mini)"]]
+        MOD[["✏️ Modify\nmodification_engine.py\nTool-calling multi-patch\n(gpt-4.1)\n• submit_patches tool\n• _replace_at_line_hint\n• verify + diff output"]]
+        GEN[["🔧 Generate\nxslt_generator.py\nCreate XSLT from spec\n(gpt-4.1)"]]
+        AUD[["✅ Audit\naudit_engine.py\nRules layer +\nOpenAI gpt-4.1\n→ SAFE / REVIEW /\n  DO NOT DEPLOY"]]
+        FRAG[["🔍 Folder Query\nrag_engine.py\nCross-file knowledge base\nqueries (ChromaDB)"]]
     end
 
-    %% User flow
+    subgraph GOVERNANCE["GOVERNANCE & VERIFICATION"]
+        AUDV[["📋 Audit Verification\naudit_followup()\nStructured Q&A form\n→ final verdict"]]
+        RS[["🗃️ rules_store.py\nSQLite audit log\napproved versions\nevent history"]]
+    end
+
+    subgraph MODELS["LLM PROVIDERS"]
+        GROQ[["⚡ Groq\nllama-3.1-8b-instant\nIntent classification only\n877 tok/s · $0.05/M"]]
+        OAI[["🤖 OpenAI\ngpt-4.1-mini — explain, simulate\ngpt-4.1 — modify, audit, generate\n1M token context · tool calling"]]
+    end
+
+    %% ── CONNECTIONS ────────────────────────────────────────────────────────
+
     U --> UI
     UI -->|"user message, file_paths"| IR
     UI -->|"uploaded files"| FI
 
-    %% Partner data feeds
-    PD --> CB
     PD --> FI
+    PD -->|"index source"| RAG
     RAG -->|"query_folder"| CB
 
-    %% Core flow
-    FI -->|"ingested dict"| CB
+    FI -->|"ingested dict"| SESS
+    FI -->|"if XSLT"| XIDX
+    XIDX -->|"xslt_index"| SESS
+
+    SESS --> CB
     CB -->|"context prefix"| DISP
     IR -->|"active_intents"| DISP
     FI -->|"ingested"| DISP
+    SESS -->|"get_primary_ingested\nget_xslt_index"| DISP
 
-    %% Dispatcher orchestrates capabilities
     DISP --> EXP
     DISP --> SIM
     DISP --> MOD
     DISP --> GEN
     DISP --> AUD
+    DISP --> FRAG
 
-    %% Session ties it all together
-    SESS --> CB
+    EXP -->|"tool calls"| XIDX
+    MOD -->|"tool calls\n(search, get_template\nget_call_chain)"| XIDX
+
+    MOD -.->|"auto-audit patched_xslt"| AUD
+    GEN -.->|"auto-audit generated_xslt"| AUD
+
+    AUD --> AUDV
+    AUD --> RS
+
     DISP --> SESS
-    FI --> SESS
+    DISP --> RS
 
-    %% Capability outputs to UI
     EXP --> UI
     SIM --> UI
     MOD --> UI
     GEN --> UI
     AUD --> UI
-
-    %% Modify & Generate auto-trigger Audit
-    MOD -.->|"auto-audit"| AUD
-    GEN -.->|"auto-audit"| AUD
-
-    %% Audit produces verification form → user answers → audit_followup
-    AUD --> AUDV
+    FRAG --> UI
     AUDV -->|"verdict"| UI
 
----
-%% Request workflow — what happens when a user sends a message
+    IR -->|"classification call"| GROQ
+    EXP -->|"tool-calling loop"| OAI
+    MOD -->|"tool-calling loop"| OAI
+    SIM -->|"LLM fallback"| OAI
+    GEN -->|"generation"| OAI
+    AUD -->|"analysis"| OAI
+    FRAG -->|"RAG answer"| GROQ
 
-flowchart LR
-    subgraph REQUEST["1. Request"]
-        A[["User message + file_paths"]]
+    %% ── REQUEST LIFECYCLE (right side inset) ───────────────────────────────
+
+    subgraph LIFECYCLE["REQUEST LIFECYCLE"]
+        direction LR
+        L1[["1. User sends message"]]
+        L2[["2. Ingest new files\n   Build xslt_index if XSLT"]]
+        L3[["3. Build context\n   Session history +\n   RAG query_folder"]]
+        L4[["4. Classify intent\n   Groq llama-3.1-8b"]]
+        L5[["5. Dispatch to engine(s)\n   Engine-specific model\n   from env var"]]
+        L6[["6. Apply patches / diff\n   verify + validate\n   Auto-audit if modify/gen"]]
+        L7[["7. Render response\n   Badge · Text · Diff\n   Form · Download button"]]
+
+        L1 --> L2 --> L3 --> L4 --> L5 --> L6 --> L7
     end
 
-    subgraph INGEST["2. Ingest"]
-        B[["File Ingestion"]]
-        C[["Session.add_file"]]
-    end
+    %% ── STYLES ────────────────────────────────────────────────────────────
+    classDef capability fill:#dbeafe,stroke:#2563eb,color:#1e3a5f
+    classDef data       fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef core       fill:#ffe4e6,stroke:#e11d48,color:#881337
+    classDef ui         fill:#f3e8ff,stroke:#7c3aed,color:#3b0764
+    classDef gov        fill:#fdf4ff,stroke:#a21caf,color:#581c87
+    classDef model      fill:#ecfdf5,stroke:#059669,color:#065f46
+    classDef ingest     fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef life       fill:#f1f5f9,stroke:#64748b,color:#1e293b
 
-    subgraph CONTEXT["3. Build context"]
-        D[["Session history"]]
-        E[["RAG query_folder"]]
-        F[["_ctx_prefix"]]
-    end
-
-    subgraph ROUTE["4. Route"]
-        G[["Intent Router"]]
-        H[["active_intents"]]
-    end
-
-    subgraph EXEC["5. Execute"]
-        I[["Dispatcher"]]
-        J[["Engine(s)"]]
-        K[["Auto-audit if modify/generate"]]
-    end
-
-    subgraph RESPOND["6. Respond"]
-        L[["primary_response"]]
-        M[["audit_dict if audit"]]
-        N[["Session.add_turn"]]
-    end
-
-    A --> B
-    B --> C
-    C --> D
-    E --> F
-    D --> F
-    A --> G
-    G --> H
-    F --> I
-    H --> I
-    B --> I
-    I --> J
-    J --> K
-    K --> L
-    L --> M
-    M --> N
+    class EXP,SIM,MOD,GEN,AUD,FRAG capability
+    class PD,RAG data
+    class IR,SESS,CB,DISP core
+    class U,UI ui
+    class AUDV,RS gov
+    class GROQ,OAI model
+    class FI,XIDX ingest
+    class L1,L2,L3,L4,L5,L6,L7 life

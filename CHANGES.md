@@ -1,22 +1,23 @@
 # PartnerLinQ Mapping Intelligence Agent — Code Changes
 
-> **Branch:** `fix/file-type-detection`
-> **Author:** Preetham Thirunavakkarasu
-> **Date:** April 2026
-> **Files changed:** `modules/file_ingestion.py` · `modules/file_agent.py`
-
 ---
 
-## What This Branch Fixes
+## Chapter 1 — File Type Detection & XSLT Template Analysis
+
+> **Branch:** `fix/file-type-detection`  
+> **Author:** Preetham Thirunavakkarasu  
+> **Date:** April 2026  
+> **Files changed:** `modules/file_ingestion.py` · `modules/file_agent.py`
+
+### Summary
 
 Three gaps were identified during user acceptance testing with real PartnerLinQ mapping data files. The agent was producing incorrect and misleading descriptions for two critical file types used in every integration project, and had no ability to explain relationships between templates in XSLT mapping stylesheets.
 
 ---
 
-## Change 1 — D365 XML File Detection and Parsing
+### Change 1 — D365 XML File Detection and Parsing
 
-### Before
-Uploading a Microsoft Dynamics 365 ERP invoice XML file (SourceFile.txt) produced this:
+**Before:** Uploading a Microsoft Dynamics 365 ERP invoice XML file (SourceFile.txt) produced:
 
 ```
 File type detected: XML
@@ -26,7 +27,7 @@ The structure does not match any known B2B integration standard."
 
 No business fields were extracted. The agent could not identify the customer, invoice number, line items, carrier, or amounts.
 
-### After
+**After:**
 ```
 File type detected: D365_XML (version: D365:AX | Inv:SOCI-214540 | SO:S0248567)
 
@@ -45,7 +46,6 @@ Microsoft Dynamics 365 Customer Invoice
                      SalesPrice→IT104, Qty→IT102, Tracking→REF*CN
 ```
 
-### Root Causes Fixed
 | # | Root Cause | Fix |
 |---|-----------|-----|
 | 1 | `detect_file_type()` had no D365 detection path — fell into generic XML | Added D365_XML detection checking for `<saleCustInvoice>` / `<custInvoiceTrans>` in content |
@@ -53,22 +53,11 @@ Microsoft Dynamics 365 Customer Invoice
 | 3 | `parse_xml()` returned a raw XML tree with no field labelling | Added `parse_d365_xml()` extracting all business fields into a labelled dict |
 | 4 | No domain-specific LLM prompt for D365 files | Added 6-section D365_XML system prompt in `file_agent.py` |
 
-### Where in the Code
-**`modules/file_ingestion.py`**
-- Line ~31: Added `_txt_is_xml` guard to X12 EDI detection block
-- Before the generic XML block: added D365_XML detection (checks `<saleCustInvoice>`, `<custInvoiceTrans>`, `<SalesTable>`)
-- New function: `parse_d365_xml()` — extracts invoice header, line items, four address blocks, shipment/carrier info, business summary string
-- `ingest_file()` dispatcher: added `elif file_type == "D365_XML": parse_d365_xml()`
-
-**`modules/file_agent.py`**
-- Added `if file_type == "D365_XML":` system prompt block with 6 structured sections covering source system ID, header fields, addresses, line items, shipment, and D365-to-EDI field mapping guide
-
 ---
 
-## Change 2 — X12 MapForce XML File Detection and Parsing
+### Change 2 — X12 MapForce XML File Detection and Parsing
 
-### Before
-Uploading a MapForce-generated X12 856 Ship Notice XML file (TargetFile.txt) produced this:
+**Before:** Uploading a MapForce-generated X12 856 Ship Notice XML file (TargetFile.txt) produced:
 
 ```
 File type detected: XML
@@ -78,7 +67,7 @@ The ISA sender and receiver cannot be determined. Business content appears empty
 
 The agent misidentified an 856 Ship Notice as an 850 Purchase Order, reported sender/receiver as unknown, and said the content was empty — all incorrect.
 
-### After
+**After:**
 ```
 File type detected: X12_XML (version: ISA:00401 | TS:856 | Root:X12_00401_856)
 
@@ -95,7 +84,6 @@ X12 856 — Ship Notice / Advance Shipment Notice (ASN)
   Carrier:    Costco UPS (routing: B)
 ```
 
-### Root Causes Fixed
 | # | Root Cause | Fix |
 |---|-----------|-----|
 | 1 | No X12_XML detection path — MapForce XML fell into generic XML or X12 EDI | Added X12_XML detection checking for `<X12_` pattern in first 500 chars |
@@ -103,59 +91,11 @@ X12 856 — Ship Notice / Advance Shipment Notice (ASN)
 | 3 | No parser for MapForce X12 XML structure | Added `parse_x12_xml()` extracting ISA/GS envelope, HL loops, segments, line items, SSCC labels |
 | 4 | No domain-specific LLM prompt for X12 XML files | Added 6-section X12_XML system prompt in `file_agent.py` |
 
-### Where in the Code
-**`modules/file_ingestion.py`**
-- Before the generic XML block: added X12_XML detection (checks root element starts with `X12_`, parses ISA version and TS number from root element name)
-- Fallback block: added X12_XML check as safety net
-- New function: `parse_x12_xml()` — extracts ISA envelope, GS group, BSN/BIG/BEG transaction segments, HL loops (S/O/P/I), REF, TD5, PRF, LIN/SN1, MAN/SSCC, CTT totals
-- `ingest_file()` dispatcher: added `elif file_type == "X12_XML": parse_x12_xml()`
-
-**`modules/file_agent.py`**
-- Added `if file_type == "X12_XML":` system prompt block with 6 structured sections covering transaction ID, ISA envelope, GS group, transaction segments, HL hierarchy, and line-item/reference data
-
 ---
 
-## Change 3 — XSLT Template Relationship Analysis
+### Change 3 — XSLT Template Relationship Analysis
 
-### Before
-When an XSLT mapping stylesheet was uploaded and the user asked "how do templates relate to each other?", the agent could only give a flat list of template names. It could not:
-- Show which templates call which other templates
-- Explain the execution flow from entry point to output
-- Map `xsl:value-of` expressions to their output EDI fields
-- Identify shared variables across templates
-- Explain conditional business logic per template
-
-### After
-The agent now produces:
-
-```
-Entry Point: match="/" template fires first.
-
-Execution Flow:
-  match="/" → calls: build_envelope
-    build_envelope → calls: build_isa, build_gs, build_st
-      build_isa → applies: ISA/* (default mode) → calls: format_date
-      build_gs  → value-of: $groupControlNum, $senderAppID
-      build_st  → for-each: /Order/LineItem → calls: build_hl_item
-
-Field Mapping (ISA segment):
-  ISA01  = hardcoded '00'          (no authorization info qualifier)
-  ISA06  = $senderID               (global param — Wilson Electronics ID)
-  ISA08  = $receiverID             (global param — trading partner ID)
-  ISA09  = format-date(...)        (today's date in YYMMDD format)
-  ISA12  = hardcoded '00401'       (X12 version 4010)
-
-Business Logic — pricingTable template:
-  xsl:choose: if @minQty exists → output bulk tier row
-              otherwise → output standard price row
-
-Hardcoded Values flagged for parameterization:
-  '00401'  — X12 version string (ISA12) — hardcoded, should be a param
-  '4356735021' — sender EDI ID (ISA06) — hardcoded, multi-partner risk
-```
-
-### What Was Added to `parse_xslt()`
-**`modules/file_ingestion.py`** — `parse_xslt()` now extracts per template:
+`parse_xslt()` in `file_ingestion.py` now extracts per template:
 
 | New Field | What It Contains |
 |-----------|-----------------|
@@ -177,82 +117,177 @@ Plus three new top-level structures:
 | `mode_index` | Templates grouped by `xsl:apply-templates` mode |
 | `hardcoded_values` | Every string literal with its location and context |
 
-**`modules/file_agent.py`** — XSLT system prompt expanded from 6 to 8 sections:
-1. Transformation Summary
-2. **Entry Points and Execution Flow** *(new — call tree with indentation)*
-3. **Template Relationship Map** *(new — per-template calls/applies/outputs)*
-4. Field Mapping Table
-5. **Variable and Parameter Dependency** *(new — cross-template variable tracing)*
-6. Conditional and Business Logic
-7. Hardcoded Values
-8. **Segment-Level Transformation Walkthrough** *(new — segment-by-segment breakdown)*
+---
+
+## Chapter 2 — Tool-Calling Architecture for Explain & Modify
+
+> **Date:** April 2026  
+> **Files changed:** `modules/xslt_index.py` (new) · `modules/modification_engine.py` · `modules/file_agent.py` · `modules/groq_agent.py` · `modules/dispatcher.py` · `modules/session.py` · `modules/llm_client.py` · `modules/intent_router.py` · `app.py` · `.env` · `.env.example`
+
+### Summary
+
+`explain` and `modify` were failing silently on large production XSLT files (400–1,200 lines) because the full file content exceeded the working context of the LLM. The fix introduces a structured XSLT index and OpenAI function calling, so the LLM fetches only what it needs rather than receiving the entire file.
 
 ---
 
-## Testing
+### Change 4 — New module: `xslt_index.py`
 
-### Quick Python smoke test
-```bash
-cd ~/Downloads/Industry-Practicum_PartnerLinQ-main
-python3 -c "
-from modules.file_ingestion import ingest_file
+A new module builds a queryable in-memory index from any `ingest_file()` output dict for an XSLT file. The index is built once at upload and stored in `Session.xslt_indices`.
 
-# Test D365 XML
-r = ingest_file(file_path='/path/to/SourceFile.txt')
-print(r['metadata']['file_type'])          # expect: D365_XML
-print(r['parsed_content']['business_summary'])
+**Index contents:**
+- `templates` — dict keyed by name and match pattern; each entry contains `calls`, `applies`, `value_of`, `conditionals`, `output_elements`, etc.
+- `variables` — global variables and params, with usage tracking across templates
+- `segment_map` — `{SEGMENT_NAME: [template_id, ...]}` for quick segment lookup
+- `hardcoded_values` — list of all literal strings in the file
+- `raw_xml` — full source text (used by `search_xslt`)
 
-# Test X12 XML
-r = ingest_file(file_path='/path/to/TargetFile.txt')
-print(r['metadata']['file_type'])          # expect: X12_XML
-print(r['parsed_content']['business_summary'])
+**Tool functions exposed to the LLM (OpenAI function-calling schema):**
 
-# Test XSLT
-r = ingest_file(file_path='test_files/sample_catalog_transform.xslt')
-print(r['metadata']['file_type'])          # expect: XSLT
-print([t['name'] or t['match'] for t in r['parsed_content']['template_call_graph']])
-print(r['parsed_content']['entry_points'])
-"
+| Tool | What it returns |
+|------|----------------|
+| `get_template(identifier)` | Full template data including `source_snippet` (numbered, for display) and `source_snippet_raw` (exact copyable text for patches) |
+| `get_variable(name)` | Declaration, select expression, and list of templates that reference the variable |
+| `get_segment_templates(segment)` | All templates producing a given EDI segment/output element |
+| `search_xslt(keyword)` | Up to 10 matching line windows (±3 lines context), each with `context` (numbered), `raw_lines` (exact text), and `match_line` (the single triggering line) |
+| `get_call_chain(entry_point)` | Full call tree from a named template or match pattern |
+
+---
+
+### Change 5 — `modification_engine.py`: multi-patch tool-calling primary path
+
+The `modify()` function now has two execution paths:
+
+**Primary path (requires `xslt_index`):**
+1. System prompt includes the XSLT table-of-contents.
+2. LLM uses `search_xslt` / `get_template` / `get_call_chain` to explore all affected locations (including cascading effects in other templates).
+3. LLM calls `submit_patches` once with a list of `{description, before, after, line_hint}` dicts.
+4. `apply_patches_sequential()` verifies all `before` blocks exist, sorts patches bottom-to-top by `line_hint`, then applies each using `_replace_at_line_hint()`.
+5. `verify_patches_applied()` confirms every `after` is present and no `before` remains.
+6. `validate_xslt_wellformed()` runs lxml on the result.
+7. `_build_slim_response()` returns a numbered change list + `difflib.unified_diff` — no full XSLT in the UI response.
+
+**Fallback path (no `xslt_index` — legacy):**
+- Used when no pre-built index is available (e.g. non-XSLT files).
+- Extracts candidate blocks by keyword search, sends to LLM, parses BEFORE/AFTER sections, applies single patch.
+
+**Key new helpers:**
+
+```python
+def _replace_at_line_hint(text, before, after, line_hint):
+    """Replace the occurrence of 'before' nearest to line_hint (not always the first)."""
+
+def apply_patches_sequential(raw_xslt, patches):
+    """All-or-nothing: verify all BEFOREs exist, sort bottom-to-top, apply."""
+
+def verify_patches_applied(patched_xslt, patches):
+    """Confirm every AFTER is present and no BEFORE remains."""
+
+def _build_slim_response(patches, verification, original_xslt, patched_xslt):
+    """Compact UI response: numbered change list + unified diff only."""
 ```
 
-### Streamlit UI test
-```bash
-python3 -m streamlit run app.py
+---
+
+### Change 6 — `session.py`: XSLT index storage
+
+Added `xslt_indices` field (dict keyed by filename) with `set_xslt_index()` / `get_xslt_index()` methods. Cleared on session `reset()`.
+
+---
+
+### Change 7 — `dispatcher.py`: engine-aware model resolution + Groq intent routing
+
+**Model resolution:**
+```python
+def _engine_model(engine: str) -> str:
+    """Return EXPLAIN_MODEL, MODIFY_MODEL etc. from env, or fall back to provider default."""
+    if model:          # caller-forced model always wins
+        return model
+    return _gdm(_prov, engine=engine)
 ```
 
-Upload files from `PartnerlinQ MappingData/856_4010_OUT_COSTCO/856/` and ask:
+Each engine now passes the appropriate model:
+- `explain()` → `EXPLAIN_MODEL` (default `gpt-4.1-mini`)
+- `modify()` → `MODIFY_MODEL` (default `gpt-4.1`)
+- `simulate()` → `SIMULATE_MODEL` (default `gpt-4.1-mini`)
+- `audit()` → `AUDIT_MODEL` (default `gpt-4.1`)
+- `generate()` → `GENERATE_MODEL` (default `gpt-4.1`)
 
-**For TargetFile.txt (X12 XML):**
-- "What type of file is this and what business transaction does it represent?"
-- "Who is the sender and receiver? What are their EDI IDs?"
-- "Explain the HL loop hierarchy."
-- "Run an audit on this file."
+**Intent routing via Groq:**
+```python
+_groq_key = os.getenv("GROQ_API_KEY")
+if _groq_key:
+    route_result = route(user_message, api_key=_groq_key, provider="groq",
+                         model=os.getenv("INTENT_ROUTER_MODEL", "llama-3.1-8b-instant"))
+else:
+    route_result = route(user_message, api_key=api_key, provider=provider or "openai")
+```
 
-**For SourceFile.txt (D365 XML):**
-- "What ERP system generated this file and what EDI transaction does it map to?"
-- "List all line items with quantities and prices."
-- "Map the D365 fields to X12 EDI segments."
+**XSLT index lifecycle:**
+- At file upload: dispatcher calls `build_xslt_index(ingested)` for any XSLT file and stores it via `session.set_xslt_index(filename, index)`.
+- At explain/modify: dispatcher retrieves the index via `session.get_xslt_index(filename)` and passes it to the engine.
 
-**For any XSLT file:**
-- "Walk me through the execution flow of this stylesheet."
-- "Which templates call which other templates?"
-- "Show me the field mapping table."
-- "Are there any hardcoded values that should be parameterized?"
+---
+
+### Change 8 — `llm_client.py`: engine-aware model resolution + `chat_complete_with_tools`
+
+**`get_default_model(provider, engine=None)`** now checks `{ENGINE}_MODEL` env var first:
+```python
+def get_default_model(provider: str, engine: Optional[str] = None) -> str:
+    if engine:
+        engine_val = os.getenv(f"{engine.upper()}_MODEL", "")
+        if engine_val:
+            return engine_val
+    provider_val = os.getenv(_MODEL_ENV_VARS.get(provider, ""), "")
+    return provider_val or DEFAULT_MODELS.get(provider, "gpt-4.1-mini")
+```
+
+**`chat_complete_with_tools()`** runs an OpenAI-style tool-calling loop:
+- Sends messages + tool schemas to the LLM.
+- On each `tool_calls` response, dispatches to the caller-supplied `tool_executor` function.
+- Appends tool results as `tool` role messages and calls the LLM again.
+- Stops when no tool calls are made or `max_tool_rounds` is reached.
+- Returns `(final_text, all_messages)` so callers can extract structured tool outputs from the message thread.
+
+---
+
+### Change 9 — `app.py`: remove API key input, filter providers by env
+
+- Removed the sidebar text input for API key override.
+- Provider dropdown now only lists providers whose `<PROVIDER>_API_KEY` environment variable is set.
+- All `dispatch()` calls resolve API keys exclusively from environment variables.
+
+---
+
+### Change 10 — `.env` / `.env.example`: per-engine model overrides
+
+New environment variables for task-specific model selection:
+
+```ini
+EXPLAIN_MODEL=gpt-4.1-mini
+MODIFY_MODEL=gpt-4.1
+SIMULATE_MODEL=gpt-4.1-mini
+AUDIT_MODEL=gpt-4.1
+GENERATE_MODEL=gpt-4.1
+INTENT_ROUTER_MODEL=llama-3.1-8b-instant
+INTENT_ROUTER_THRESHOLD=0.45
+```
+
+If any variable is unset, `get_default_model()` falls back to the provider-level default.
 
 ---
 
 ## Backward Compatibility
 
-All existing file types are unaffected:
+All changes are additive or narrowly scoped:
 
 | File Type | Detection | Parser | Status |
 |-----------|-----------|--------|--------|
-| X12 EDI (flat file) | `content_start.startswith("ISA")` | `parse_x12_edi()` | ✅ Unchanged |
-| EDIFACT | `UNA` / `UNB` prefix | `parse_edifact()` | ✅ Unchanged |
-| XSLT | `.xsl`/`.xslt` extension or `xsl:stylesheet` in content | `parse_xslt()` | ✅ Enhanced (backward compatible) |
-| XSD | `.xsd` extension or `xs:schema` in content | `parse_xsd()` | ✅ Unchanged |
-| XML (generic) | `.xml` extension or `<?XML` declaration | `parse_xml()` | ✅ Unchanged |
-| **D365_XML** | `<saleCustInvoice>` / `<custInvoiceTrans>` in content | `parse_d365_xml()` | 🆕 New |
-| **X12_XML** | `<X12_` root element pattern in content | `parse_x12_xml()` | 🆕 New |
+| X12 EDI (flat file) | `content_start.startswith("ISA")` | `parse_x12_edi()` | Unchanged |
+| EDIFACT | `UNA` / `UNB` prefix | `parse_edifact()` | Unchanged |
+| XSLT / XSL | extension or `xsl:stylesheet` in content | `parse_xslt()` | Enhanced (backward compatible) |
+| XSD | extension or `xs:schema` | `parse_xsd()` | Unchanged |
+| XML (generic) | extension or `<?xml` declaration | `parse_xml()` | Unchanged |
+| D365_XML | `<saleCustInvoice>` in content | `parse_d365_xml()` | Added Ch. 1 |
+| X12_XML | `<X12_` root element | `parse_x12_xml()` | Added Ch. 1 |
 
-No database changes, no new dependencies, no configuration changes, no breaking API changes.
+No database schema changes, no new required dependencies for existing functionality, no breaking API changes. The tool-calling path in `modify()` activates only when `xslt_index` is provided; all callers that do not pass it continue using the legacy path unchanged.

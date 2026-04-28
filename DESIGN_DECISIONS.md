@@ -4,16 +4,17 @@ This document explains the key architectural and product decisions made during d
 
 ---
 
-## 1. Groq + LLaMA 3.3 70B instead of OpenAI GPT-4
+## 1. Dual-provider strategy — Groq for classification, OpenAI for execution
 
-**Decision:** Use Groq's inference API with the `llama-3.3-70b-versatile` model as the LLM backbone.
+**Decision:** Use two LLM providers for different tasks. Groq (llama-3.1-8b-instant) handles intent classification only; OpenAI (gpt-4.1-mini / gpt-4.1) handles explain, modify, simulate, audit, and generate.
 
 **Reasons:**
-- Groq's hardware accelerator delivers sub-second latency on 70B-parameter models, which is critical for a conversational UI that must feel responsive.
-- The free tier provides sufficient tokens for a practicum project without a billing relationship.
-- LLaMA 3.3 70B performs comparably to GPT-4-turbo on structured-output tasks (XSLT generation, JSON audit questions) while remaining fully open-weight, reducing vendor lock-in.
+- Intent classification is a narrow JSON-output task. `llama-3.1-8b-instant` runs at ~877 tok/s on Groq with a cost of $0.05/M tokens — approximately 50× cheaper than running it on OpenAI `gpt-4.1`.
+- `gpt-4.1` has a 1M-token context window, native function/tool calling, and significantly stronger code reasoning than any open-weight model at the time, making it the right choice for deep XSLT analysis.
+- Keeping the classification path on Groq means the system can still route correctly even when the user has only a Groq key — it will fall back gracefully to OpenAI for execution only when both keys are present.
+- Per-engine model overrides are configurable in `.env` (`EXPLAIN_MODEL`, `MODIFY_MODEL`, `AUDIT_MODEL`, etc.) so the balance can be tuned without code changes.
 
-**Tradeoff:** Groq daily token quotas can be exhausted under heavy testing. The fix is to rotate API keys or introduce request queuing — not a code change.
+**Tradeoff:** Two API keys are required for full functionality. If only `OPENAI_API_KEY` is set, classification falls back to OpenAI which works correctly but costs more per turn.
 
 ---
 
@@ -39,7 +40,7 @@ This document explains the key architectural and product decisions made during d
 - Users who generate XSLT and immediately download it without reading the audit report are the highest-risk scenario.
 - Making the audit invisible and automatic means it runs even when the user does not think to ask for it.
 
-**Tradeoff:** Doubles the Groq API calls on modify/generate turns, increasing latency and token usage. Acceptable because modify and generate are the least frequent intents.
+**Tradeoff:** Doubles the API calls on modify/generate turns, increasing latency and token usage. Acceptable because modify and generate are the least frequent intents.
 
 ---
 
@@ -132,3 +133,44 @@ This document explains the key architectural and product decisions made during d
 - The session ID is a UUID generated at login, making collisions practically impossible.
 
 **Tradeoff:** The `data/uploads/` directory fills up with prefixed files over time. A cleanup sweep keyed on session ID age is a natural future improvement.
+
+---
+
+## 11. XSLT tool-calling index for explain and modify (instead of full-file context)
+
+**Decision:** For XSLT files, build an in-memory index (`xslt_index.py`) at upload time and expose it to the LLM as OpenAI function-calling tools (`search_xslt`, `get_template`, `get_variable`, `get_segment_templates`, `get_call_chain`). The LLM fetches only the parts it needs rather than receiving the full XSLT in its context window.
+
+**Reasons:**
+- Production XSLT mapping files at PartnerLinQ are 400–1,200 lines. Sending them in full on every explain or modify turn is expensive (30–100K tokens per file) and unreliable — the model loses track of structure in very long context windows.
+- A tool-calling approach allows the LLM to explore the file like a developer would: search for a keyword, open a specific template, trace a call chain. This produces more accurate answers and patches than reading everything at once.
+- The index is built once at upload from `file_ingestion` output (which already contains the parsed template graph, variables, segments, and raw XML), so there is zero extra I/O cost at query time.
+- Tool execution is pure Python dictionary lookup — no network call, no embedding, no latency beyond the LLM turns themselves.
+
+**Tradeoff:** Requires OpenAI as the LLM provider (function calling). Non-OpenAI providers fall back gracefully to the legacy single-context path. Adds 1–3 extra tool-call round trips per explain/modify turn but produces substantially better results on large files.
+
+---
+
+## 12. Multi-patch tool-calling for modify with line-hint-aware replacement
+
+**Decision:** `modify()` uses a `submit_patches` tool that accepts a structured list of `{description, before, after, line_hint}` dicts. Patches are applied bottom-to-top using `_replace_at_line_hint()` which selects the occurrence nearest to `line_hint` when `before` appears multiple times.
+
+**Reasons:**
+- The legacy single-patch approach used `str.replace(before, after, 1)` which always replaced the first occurrence. In a 400-line XSLT, many lines like `<xsl:sequence select="fn:string(.)" />` appear dozens of times — the first one is almost never the right one.
+- Submitting all patches in a single tool call (rather than iteratively) means the LLM must explore and commit at once, reducing token usage and eliminating the risk of conflicting incremental patches.
+- Bottom-to-top application (sorted by `line_hint` descending) means earlier patches do not shift line numbers for later ones, making the final character-offset arithmetic correct regardless of multi-line `after` blocks.
+- An all-or-nothing pre-flight check (verify every `before` exists before touching anything) prevents partial application that could produce a broken XSLT with no recovery path.
+
+**Tradeoff:** If the LLM provides a wrong `line_hint`, the nearest-occurrence selection may still pick the wrong line when two identical snippets are close together. Mitigated by instructing the LLM to use multi-line `raw_lines` from `search_xslt` as the `before` block instead of a single-line `match_line` when the single line is not unique.
+
+---
+
+## 13. API keys backend-only (no UI override)
+
+**Decision:** API keys are read exclusively from `.env` environment variables. There is no text input in the sidebar to override them at runtime.
+
+**Reasons:**
+- Exposing a key input in the UI puts secrets in the browser DOM, where they can be captured by browser extensions, screenshots, or screen-share sessions.
+- In a shared deployment (multiple analysts using the same app instance), a per-turn key override would allow one user to accidentally or intentionally substitute another user's key.
+- The provider selector in the sidebar already shows only providers whose `<PROVIDER>_API_KEY` is present in the environment, making the set of available providers clear without exposing the keys themselves.
+
+**Tradeoff:** Changing providers requires a server restart to reload `.env`. Acceptable for a practicum-scale deployment where the operator controls the environment.
