@@ -248,3 +248,11 @@ data/*
 # Created at runtime; never committed.
 rules_store.db
 rules_store.db-*
+
+# ── Runtime-generated XSLT artefacts ─────────────────────────────────────────
+# Temp files written by the dispatcher for simulate / modify / generate flows.
+# Downloaded by the user via the UI; should not be tracked.
+data/uploads/
+*_patched.xml
+*_generated.xml
+*_latest_revision.xml

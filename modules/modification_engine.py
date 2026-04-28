@@ -4,52 +4,45 @@ modification_engine.py
 Propose AND apply targeted edits to an XSLT mapping stylesheet based on a
 user request written in plain English.
 
-Pipeline
---------
-1. Validate inputs (ingested dict, modification request string).
-2. Extract the raw XSLT source from the ingested dict.
-   - A truncated copy (~10 000 chars) is sent to the LLM for the prompt.
-   - The full source is kept in memory for patch application.
-3. Build a concise LLM prompt: the XSLT source + the user's modification request.
-4. Call Groq and ask it to return a structured patch:
-      CHANGE SUMMARY  -- one-sentence description
-      BEFORE BLOCK    -- the exact XML lines to find in the original file
-      AFTER BLOCK     -- the replacement XML (valid XSLT 2.0)
-      EXPLANATION     -- why this change achieves the goal
-5. Parse the BEFORE/AFTER blocks from the LLM response (_parse_patch).
-6. Apply the patch to the full XSLT source (apply_patch):
-      - Exact-string match first.
-      - Normalised-whitespace sliding-window match as fallback.
-7. Validate the patched XSLT is well-formed XML (validate_xslt_wellformed).
-8. Return (response_str, patched_xslt_or_None):
-      - response_str  -- the full LLM proposal text + patch status note
-      - patched_xslt  -- the modified XSLT string if applied OK, else None
-   The dispatcher passes patched_xslt to app.py for the Download button.
+Primary pipeline (tool-calling, requires xslt_index)
+-----------------------------------------------------
+1. Build MODIFY_TOOLS = XSLT exploration tools + submit_patches.
+2. LLM uses search_xslt / get_template / get_call_chain to explore the full
+   XSLT, finding ALL affected locations and understanding cascading effects.
+3. LLM calls submit_patches({patches: [...]}) once with a structured list of
+   {description, before, after, line_hint} dicts.  "before" is copied
+   character-for-character from tool results (raw_lines / source_snippet_raw).
+4. apply_patches_sequential() verifies every BEFORE exists, then applies all
+   patches bottom-to-top (by line_hint) using plain str.replace so untouched
+   lines remain byte-for-byte identical.
+5. verify_patches_applied() confirms every AFTER is present and no BEFORE
+   remains (all-or-nothing: reject if any patch failed).
+6. validate_xslt_wellformed() runs lxml on the result.
+7. _build_slim_response() returns a numbered change list + unified diff only.
+   The dispatcher appends the AUTO-AUDIT as usual.
 
-Supported modification types
------------------------------
+Fallback pipeline (no xslt_index — legacy path)
+------------------------------------------------
+- Used when no pre-built XSLT index is available.
+- Extracts candidate blocks from full XSLT, sends to LLM, parses BEFORE/AFTER.
+- Single-patch exact string replace.
+
+Supported modification types (both paths)
+------------------------------------------
 - Change a hardcoded value (sender ID, qualifier, account number)
-- Add a new field mapping  (new xsl:value-of inside an existing template)
-- Add a new item/line row  (new xsl:for-each loop + child value-of elements)
-- Add a new named template (new xsl:template block + xsl:call-template hook)
+- Add a new field mapping  (xsl:value-of inside an existing template)
+- Add a new item/line row  (xsl:for-each loop + child value-of elements)
+- Add a new named template (xsl:template block + xsl:call-template hook)
 - Remove an existing block (any element or group of elements)
 - Rename or reorder segments
-
-Token budget (Groq on-demand, llama-3.3-70b-versatile):
-  System prompt    : ~450 tokens
-  XSLT content     : <= 10 000 chars ~= 2 500 tokens
-  User request     : ~150 tokens
-  Output budget    : 1 500 tokens
-  Total            : ~4 600 tokens
 
 Usage (as module)::
 
     from modules.modification_engine import modify
     from modules.file_ingestion import ingest_file
 
-    ingested = ingest_file("MappingData/.../810_NordStrom_Xslt_11-08-2023.xml")
-    response, patched = modify(ingested, "Add a new IT1 line item row with ItemId and Qty")
-    print(response)
+    ingested  = ingest_file("MappingData/810_NordStrom.xml")
+    response, patched = modify(ingested, "Change sender ID to ACME001")
     if patched:
         with open("patched.xml", "w") as f:
             f.write(patched)
@@ -59,6 +52,7 @@ Usage (standalone test)::
     python modules/modification_engine.py [xslt_file] ["modification request"]
 """
 
+import difflib
 import os
 import re
 import json
@@ -247,6 +241,406 @@ General rules:
 - If a required anchor does not exist in those real blocks, leave BEFORE/AFTER empty and say so in EXPLANATION.
 - Match the indentation of the surrounding code exactly.
 """
+
+
+# ---------------------------------------------------------------------------
+# Tool-calling: submit_patches tool + system prompt
+# ---------------------------------------------------------------------------
+
+SUBMIT_PATCHES_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "submit_patches",
+        "description": (
+            "Submit the final, complete list of patches to apply to the XSLT. "
+            "Call this ONCE after you have finished exploring the stylesheet. "
+            "Use an empty patches list if no change is needed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "patches": {
+                    "type": "array",
+                    "description": "Ordered list of patches to apply.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": {
+                                "type": "string",
+                                "description": "One-sentence human-readable description of this patch.",
+                            },
+                            "before": {
+                                "type": "string",
+                                "description": (
+                                    "The EXACT text to replace — copied character-for-character "
+                                    "from the 'match_line' or 'raw_lines' field of search_xslt, "
+                                    "or from 'source_snippet_raw' of get_template. "
+                                    "Must NOT include line-number prefixes. "
+                                    "Use the smallest unique snippet (one line preferred)."
+                                ),
+                            },
+                            "after": {
+                                "type": "string",
+                                "description": (
+                                    "The replacement text. Preserve the same indentation as 'before'. "
+                                    "For deletions, use an empty string."
+                                ),
+                            },
+                            "line_hint": {
+                                "type": "integer",
+                                "description": (
+                                    "Approximate line number from search_xslt 'line_number' field. "
+                                    "Used to sort patches bottom-to-top for safe sequential application."
+                                ),
+                            },
+                        },
+                        "required": ["description", "before", "after", "line_hint"],
+                    },
+                },
+                "cascade_notes": {
+                    "type": "string",
+                    "description": (
+                        "Brief note on cascading effects or why no patches are needed. "
+                        "Leave empty if no special notes."
+                    ),
+                },
+                "risk": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "description": "Estimated risk of this change set.",
+                },
+            },
+            "required": ["patches"],
+        },
+    },
+}
+
+_MODIFY_SYSTEM_PROMPT = """\
+You are an expert XSLT 2.0 / EDI developer.  Your task is to modify an XSLT \
+stylesheet according to the user's request.
+
+━━ WORKFLOW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Use search_xslt to find EVERY occurrence of what needs to change.
+   Search for multiple terms if the request touches several fields.
+2. Use get_call_chain to discover what other templates are downstream of any \
+   changed template.
+3. Use get_template on each affected template to see exact source lines.
+4. When you have complete information, call submit_patches ONCE with ALL \
+   patches needed.  Do not call it more than once.
+
+━━ RULES FOR PATCH "before" FIELD ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Copy the "before" text EXACTLY from one of these fields returned by tools:
+    - search_xslt  →  use "match_line"  (single line, already stripped)
+                   →  or "raw_lines"   (window, stripped of line-number prefixes)
+    - get_template →  use "source_snippet_raw"
+• Do NOT use the "context" or "source_snippet" fields — those contain \
+  line-number prefixes that are NOT in the actual file.
+• "before" must appear verbatim in the XSLT source.  If you cannot guarantee \
+  an exact match, omit that patch.
+• Use the SMALLEST unique snippet — one line is best.  Multi-line blocks only \
+  when a single line is not unique enough to locate safely.
+
+━━ OTHER RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• One patch per location — if the same text appears in multiple places and \
+  all need changing, create one patch per occurrence.
+• "after": preserve identical indentation to "before".  For deletions use "".
+• "line_hint": use the "line_number" from the search_xslt result.
+• Call submit_patches with patches=[] if no change is needed, and explain in \
+  cascade_notes.
+• Never return free-form BEFORE/AFTER markdown sections — only submit_patches.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Tool-calling apply / verify / response helpers (primary path)
+# ---------------------------------------------------------------------------
+
+def _extract_submitted_patches(final_messages: List[Dict[str, Any]]) -> Tuple[List[dict], str]:
+    """
+    Scan the tool-calling message thread for a submit_patches call.
+
+    Returns (patches, cascade_notes).  patches is an empty list when the LLM
+    determined no changes were needed or the tool was never called.
+    """
+    for msg in final_messages:
+        if msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if (tc.get("function") or {}).get("name") != "submit_patches":
+                continue
+            try:
+                args = json.loads(tc["function"]["arguments"])
+                return args.get("patches", []), args.get("cascade_notes", "")
+            except (json.JSONDecodeError, KeyError):
+                pass
+    return [], ""
+
+
+def _replace_at_line_hint(text: str, before: str, after: str, line_hint: int) -> str:
+    """
+    Replace the occurrence of *before* in *text* whose starting line is
+    closest to *line_hint*, then return the modified string.
+
+    When *before* occurs only once, behaves identically to str.replace(..., 1).
+    When *before* occurs multiple times this picks the right occurrence so that
+    a `search_xslt` result at e.g. line 178 is not confused with an identical
+    snippet at line 125.
+    """
+    # Collect all byte-offset positions where before occurs
+    positions: List[int] = []
+    start = 0
+    while True:
+        idx = text.find(before, start)
+        if idx == -1:
+            break
+        positions.append(idx)
+        start = idx + 1
+
+    if not positions:
+        return text  # nothing to replace
+
+    if len(positions) == 1 or line_hint <= 0:
+        # Simple case
+        return text[: positions[0]] + after + text[positions[0] + len(before) :]
+
+    # Map each position to its 1-based line number by counting newlines
+    def _line_of(pos: int) -> int:
+        return text.count("\n", 0, pos) + 1
+
+    best_pos = min(positions, key=lambda p: abs(_line_of(p) - line_hint))
+    return text[: best_pos] + after + text[best_pos + len(before) :]
+
+
+def apply_patches_sequential(
+    raw_xslt: str,
+    patches: List[dict],
+) -> Tuple[str, bool, Optional[str]]:
+    """
+    Apply a list of patches to raw_xslt using plain string replacement.
+
+    Strategy
+    --------
+    1. Verify every BEFORE block exists in the source before touching anything.
+       If any is missing → abort the whole set (all-or-nothing).
+    2. Sort patches by line_hint DESCENDING (bottom-to-top) so earlier patches
+       do not shift line numbers for later ones.
+    3. Apply each patch with _replace_at_line_hint() — when *before* appears
+       multiple times in the file, this selects the occurrence whose starting
+       line is closest to the patch's line_hint, avoiding off-target edits.
+
+    Returns (patched_xslt, success, error_message).
+    """
+    if not patches:
+        return raw_xslt, False, "No patches to apply."
+
+    # Step 1 — verify all BEFOREs exist
+    for i, p in enumerate(patches):
+        before = p.get("before", "")
+        if not before:
+            return raw_xslt, False, f"Patch {i + 1} has an empty 'before' field."
+        if before not in raw_xslt:
+            return (
+                raw_xslt,
+                False,
+                f"Patch {i + 1} BEFORE block not found in XSLT source "
+                f"(description: {p.get('description', '?')!r}). "
+                "Aborting all patches.",
+            )
+
+    # Step 2 — sort bottom-to-top so earlier patches don't shift line numbers
+    sorted_patches = sorted(patches, key=lambda p: int(p.get("line_hint", 0)), reverse=True)
+
+    # Step 3 — apply, targeting the occurrence nearest to line_hint
+    working = raw_xslt
+    for p in sorted_patches:
+        working = _replace_at_line_hint(
+            working, p["before"], p["after"], int(p.get("line_hint", 0))
+        )
+
+    return working, True, None
+
+
+def verify_patches_applied(
+    patched_xslt: str,
+    patches: List[dict],
+) -> Dict[str, Any]:
+    """
+    Confirm that every patch was actually written into patched_xslt.
+
+    Checks:
+    - AFTER text is present in the patched file.
+    - BEFORE text is no longer present (confirms the replace happened, not
+      that the text was already there from a prior occurrence).
+
+    Returns {"all_applied": bool, "details": [...]}.
+    """
+    all_ok = True
+    details = []
+    for i, p in enumerate(patches):
+        after   = p.get("after", "")
+        before  = p.get("before", "")
+        # after=="" means deletion — deletion is confirmed when before is absent
+        if after == "":
+            applied = before not in patched_xslt
+        else:
+            applied = after in patched_xslt
+        details.append({
+            "patch_index":           i + 1,
+            "description":           p.get("description", ""),
+            "applied":               applied,
+            "before_still_present":  before in patched_xslt,
+        })
+        if not applied:
+            all_ok = False
+    return {"all_applied": all_ok, "details": details}
+
+
+def _build_slim_response(
+    patches: List[dict],
+    verification: Dict[str, Any],
+    original_xslt: str,
+    patched_xslt: str,
+    cascade_notes: str = "",
+) -> str:
+    """
+    Build a compact UI response: numbered change list + unified diff only.
+    The dispatcher appends AUTO-AUDIT separately — no need to include it here.
+    """
+    n_ok  = sum(1 for d in verification["details"] if d["applied"])
+    n_tot = len(patches)
+
+    lines: List[str] = [
+        f"## Changes Made — {n_ok}/{n_tot} patch{'es' if n_tot != 1 else ''} applied\n"
+    ]
+
+    for detail in verification["details"]:
+        icon = "✓" if detail["applied"] else "✗"
+        lines.append(f"{detail['patch_index']}. {icon} {detail['description']}")
+
+    if cascade_notes:
+        lines.append(f"\n> **Note:** {cascade_notes}")
+
+    # Unified diff — changed lines + 2 lines of context, capped at 120 lines
+    diff_lines = list(difflib.unified_diff(
+        original_xslt.splitlines(),
+        patched_xslt.splitlines(),
+        fromfile="original",
+        tofile="patched",
+        lineterm="",
+        n=2,
+    ))
+    # Skip the --- / +++ file header lines (first 2)
+    diff_body = diff_lines[2:] if len(diff_lines) > 2 else diff_lines
+    cap = 120
+    if diff_body:
+        lines.append("\n```diff")
+        lines.extend(diff_body[:cap])
+        if len(diff_body) > cap:
+            lines.append(f"... ({len(diff_body) - cap} more lines not shown)")
+        lines.append("```")
+    else:
+        lines.append("\n_(diff is empty — no textual changes detected)_")
+
+    return "\n".join(lines)
+
+
+def _modify_with_tools(
+    ingested: dict,
+    modification_request: str,
+    xslt_index: dict,
+    api_key: str,
+    model: str,
+    provider: str,
+) -> Tuple[str, Optional[str]]:
+    """
+    Primary modify path: uses XSLT tool-calling to explore the file, then
+    applies all patches returned via submit_patches.
+
+    Returns (response_str, patched_xslt | None).
+    """
+    try:
+        from .xslt_index import XSLT_TOOLS, execute_xslt_tool, get_toc_string
+        from .llm_client import chat_complete_with_tools
+    except ImportError:
+        from xslt_index import XSLT_TOOLS, execute_xslt_tool, get_toc_string  # type: ignore
+        from llm_client import chat_complete_with_tools  # type: ignore
+
+    parsed    = ingested.get("parsed_content", {})
+    meta      = ingested.get("metadata", {})
+    full_raw  = parsed.get("raw_xml") or parsed.get("raw_text") or ""
+    if not full_raw:
+        return "[modify] Could not extract XSLT source from ingested file.", None
+
+    toc_str   = get_toc_string(xslt_index)
+    tools     = XSLT_TOOLS + [SUBMIT_PATCHES_TOOL]
+
+    system_msg = (
+        _MODIFY_SYSTEM_PROMPT
+        + f"\n\nXSLT FILE TABLE OF CONTENTS\n{'─'*40}\n{toc_str}\n{'─'*40}\n"
+        + "Use the tools above to explore the stylesheet before submitting patches."
+    )
+
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user",   "content": modification_request.strip()},
+    ]
+
+    def _executor(tool_name: str, args: dict) -> dict:
+        if tool_name == "submit_patches":
+            # Acknowledge receipt; actual extraction happens from final_messages.
+            return {
+                "status": "received",
+                "patch_count": len(args.get("patches", [])),
+                "note": "Patches captured. Write a brief confirmation message and stop.",
+            }
+        return execute_xslt_tool(xslt_index, tool_name, args)
+
+    _response_text, final_messages = chat_complete_with_tools(
+        messages=messages,
+        tools=tools,
+        tool_executor=_executor,
+        api_key=api_key,
+        model=model,
+        provider=provider,
+        temperature=0.1,
+        max_tokens=2048,
+        max_tool_rounds=15,
+        engine="modify",
+    )
+
+    patches, cascade_notes = _extract_submitted_patches(final_messages)
+
+    if not patches:
+        reason = cascade_notes or _response_text or "No patches were submitted by the model."
+        return f"[modify] No changes applied.\n\n{reason}", None
+
+    # Apply — all-or-nothing
+    patched_xslt, ok, err = apply_patches_sequential(full_raw, patches)
+    if not ok:
+        return f"[modify] Patch application failed: {err}", None
+
+    # Verify each patch landed
+    verification = verify_patches_applied(patched_xslt, patches)
+    if not verification["all_applied"]:
+        failed = [d for d in verification["details"] if not d["applied"]]
+        desc   = "; ".join(d["description"] for d in failed)
+        return (
+            f"[modify] Patch verification failed for: {desc}. "
+            "The original file has not been modified.",
+            None,
+        )
+
+    # Validate XML
+    is_valid, xml_err = validate_xslt_wellformed(patched_xslt)
+    if not is_valid:
+        return (
+            f"[modify] Patched XSLT failed XML validation: {xml_err}\n"
+            "The original file has not been modified.",
+            None,
+        )
+
+    response = _build_slim_response(patches, verification, full_raw, patched_xslt, cascade_notes)
+    return response, patched_xslt
 
 
 # ---------------------------------------------------------------------------
@@ -1432,7 +1826,8 @@ def modify(
     modification_request: str,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    provider: str = "groq",
+    provider: str = "openai",
+    xslt_index: Optional[dict] = None,
 ) -> Tuple[str, Optional[str]]:
     """
     Propose and auto-apply a targeted edit to an XSLT mapping based on a
@@ -1441,21 +1836,20 @@ def modify(
     Args
     ----
     ingested:              Output dict from file_ingestion.ingest_file().
-                           Must be an XSLT or XML mapping file.
     modification_request:  Plain-English description of the change.
-                           E.g. "Change the hardcoded sender ID to ACME001"
-                                "Add a new IT1 line item row with ItemId and Qty"
-                                "Add ShipDate field to the DTM segment"
-    api_key:               Groq API key. Falls back to GROQ_API_KEY env var.
-    model:                 Groq model. Falls back to GROQ_MODEL env var,
-                           then llama-3.3-70b-versatile.
+    api_key:               Provider API key. Falls back to env vars.
+    model:                 Model override.
+    provider:              LLM provider (default: "openai").
+    xslt_index:            Pre-built XSLT index from xslt_index.build_xslt_index().
+                           When provided, the tool-calling path is used (primary).
+                           When None, the legacy single-patch path is used.
 
     Returns
     -------
     (response_str, patched_xslt)
-    - response_str  -- full LLM proposal text + auto-apply status note.
-    - patched_xslt  -- the modified XSLT string if patch was applied and
-                       validated successfully, or None if it could not be applied.
+    - response_str  -- slim change list + diff, or error message.
+    - patched_xslt  -- the modified XSLT string if all patches applied and
+                       validated, or None on failure.
     """
     # -- Validate inputs -------------------------------------------------------
     if not isinstance(ingested, dict):
@@ -1466,12 +1860,30 @@ def modify(
         raise ValueError("modification_request must be a non-empty string")
 
     from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
-    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
-    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "OPENAI_API_KEY")
+    key = (
+        api_key
+        or os.environ.get(env_key_name)
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("GROQ_API_KEY")
+    )
     if not key:
         raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
+    # -- Primary path: tool-calling (requires xslt_index) ----------------------
+    if xslt_index is not None:
+        resolved_model = model or os.getenv("MODIFY_MODEL") or DEFAULT_MODELS.get(provider, "gpt-4.1")
+        return _modify_with_tools(
+            ingested=ingested,
+            modification_request=modification_request,
+            xslt_index=xslt_index,
+            api_key=key,
+            model=resolved_model,
+            provider=provider,
+        )
+
+    # -- Legacy path: single BEFORE/AFTER patch (no xslt_index) ----------------
+    resolved_model = model or os.getenv("MODIFY_MODEL") or DEFAULT_MODELS.get(provider, "gpt-4.1")
 
     # -- Extract XSLT source ---------------------------------------------------
     parsed    = ingested.get("parsed_content", {})

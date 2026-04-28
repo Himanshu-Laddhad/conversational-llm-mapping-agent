@@ -359,11 +359,17 @@ def _get_template(index: dict, identifier: str) -> dict:
     # Strip raw_xml from a copy to keep the result focused
     result = {k: v for k, v in entry.items() if k != "raw_xml"}
 
-    # Add a source snippet if available
+    # Add a source snippet if available — returns both numbered (for display)
+    # and raw (for exact patch construction).
     raw = index.get("raw_xml", "")
-    if raw and entry.get("name"):
+    if raw and (entry.get("name") or entry.get("match")):
         snippet = _extract_template_source(raw, entry.get("name"), entry.get("match"))
-        if snippet:
+        if isinstance(snippet, dict):
+            result["source_snippet"]     = snippet["numbered"]   # display version
+            result["source_snippet_raw"] = snippet["raw"]        # exact copyable text
+            result["source_start_line"]  = snippet["start_line"]
+            result["source_end_line"]    = snippet["end_line"]
+        elif snippet:
             result["source_snippet"] = snippet
 
     return result
@@ -447,10 +453,17 @@ def _search_xslt(index: dict, keyword: str) -> dict:
                 window_lines = lines[start:end]
                 matching_windows.append({
                     "line_number": i + 1,
+                    # context: human-readable with line-number prefix for orientation
                     "context": "\n".join(
                         f"{start + j + 1:4d}  {ln}"
                         for j, ln in enumerate(window_lines)
                     ),
+                    # raw_lines: exact source text WITHOUT line-number prefix.
+                    # Use these when building patch "before" blocks — they must
+                    # match the XSLT character-for-character.
+                    "raw_lines": "\n".join(window_lines),
+                    # match_line: the single line that triggered this match (exact)
+                    "match_line": lines[i],
                 })
             if len(matching_windows) >= 10:
                 break
@@ -557,9 +570,22 @@ def _extract_template_source(raw_xml: str, name: Optional[str], match: Optional[
 
     snippet_lines = lines[start_idx : end_idx + 1]
     # Cap at 80 lines to avoid huge tool results
+    truncated = False
     if len(snippet_lines) > 80:
-        snippet_lines = snippet_lines[:78] + ["  ... [truncated — use search_xslt for more]"]
+        snippet_lines = snippet_lines[:78]
+        truncated = True
 
-    return "\n".join(
+    numbered = "\n".join(
         f"{start_idx + j + 1:4d}  {ln}" for j, ln in enumerate(snippet_lines)
     )
+    if truncated:
+        numbered += "\n  ... [truncated — use search_xslt for full content]"
+
+    # Return a dict so callers get both the numbered display version AND the
+    # raw text for exact patch construction.
+    return {
+        "numbered": numbered,
+        "raw": "\n".join(snippet_lines),
+        "start_line": start_idx + 1,
+        "end_line": start_idx + len(snippet_lines),
+    }

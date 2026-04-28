@@ -794,12 +794,17 @@ def dispatch(
                 msg = _ctx_prefix + user_message
                 # FIX: capture patched_xslt (second return value) — was wrongly
                 # discarded as `_mod_agent` in earlier versions.
+                _modify_idx = (
+                    session.get_xslt_index(resolved_xslt_path)
+                    if session is not None else None
+                )
                 response, patched_xslt = modify(
                     xslt_ingested,
                     modification_request=msg,
                     api_key=api_key,
                     model=_engine_model("modify"),
                     provider=provider or "openai",
+                    xslt_index=_modify_idx,
                 )
                 modify_guidance = extract_modify_guidance(response)
                 if modify_guidance.get("status"):

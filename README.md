@@ -116,84 +116,77 @@ python3 -m streamlit run app.py
 
 ## How the Code Works — Full Flow
 
-Every message you send goes through a 7-step pipeline:
+Every message you send goes through this pipeline:
 
 ```
 User Message
      │
      ▼
 ┌─────────────────────────────────────────────────────┐
-│  Step 1: File Ingestion (file_ingestion.py)          │
-│  Reads and parses the uploaded XSLT/EDI file into   │
-│  a structured dict with metadata and content        │
+│  Step 1: File Ingestion  (file_ingestion.py)         │
+│  Parses uploaded XSLT/EDI/XML into a structured     │
+│  dict. On first XSLT upload, builds an in-memory    │
+│  XSLT index (xslt_index.py) stored in the session.  │
 └────────────────────────┬────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────┐
-│  Step 2: Out-of-Scope Guardrail (dispatcher.py)      │
+│  Step 2: Out-of-Scope Guardrail  (dispatcher.py)     │
 │  Keyword-checks the message for EDI/XSLT signals.   │
-│  If none found → returns a redirect message.        │
-│  Zero LLM tokens spent on off-topic questions.      │
+│  Off-topic → returns redirect. Zero LLM tokens.     │
 └────────────────────────┬────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────┐
-│  Step 3: Intent Classification (intent_router.py)    │
-│  Sends message to LLM → gets confidence scores      │
-│  for all 5 intents (explain/modify/simulate/        │
-│  generate/audit). Any score ≥ 0.45 is "active".    │
-│  LLM CALL #1 — uses ~200–400 tokens                 │
+│  Step 3: Intent Classification  (intent_router.py)   │
+│  Groq llama-3.1-8b-instant scores all 5 intents     │
+│  independently. Any score ≥ 0.45 is "active".       │
+│  LLM CALL #1 — ~200 tokens, ~50 ms on Groq          │
 └────────────────────────┬────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────┐
-│  Step 4: RAG Context Injection (rag_engine.py)       │
-│  If .rag_index/ exists, retrieves top-3 relevant    │
-│  snippets from indexed data/ files and prepends     │
-│  them to the engine prompt.                         │
+│  Step 4: RAG Context Injection  (rag_engine.py)      │
+│  Top-3 relevant snippets from .rag_index/ prepended  │
+│  to the engine prompt when the index exists.         │
 └────────────────────────┬────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────┐
-│  Step 5: Engine Dispatch (dispatcher.py)             │
-│  Calls one engine per active intent:                │
+│  Step 5: Engine Dispatch  (dispatcher.py)            │
 │                                                     │
-│  explain  → groq_agent.explain()   LLM CALL #2     │
-│  simulate → simulation_engine.simulate()            │
-│  modify   → modification_engine.modify() LLM CALL  │
-│  generate → xslt_generator.generate()   LLM CALL   │
-│  audit    → audit_engine.audit()        LLM CALL   │
+│  explain  → gpt-4.1-mini  tool-calling loop         │
+│             LLM uses search/get_template/call_chain  │
+│             to explore XSLT before answering         │
+│                                                     │
+│  modify   → gpt-4.1  tool-calling loop              │
+│             LLM explores XSLT, calls submit_patches  │
+│             with all changes; applied bottom-to-top  │
+│             + verified + diff shown                  │
+│                                                     │
+│  simulate → gpt-4.1-mini  + Saxon-HE / lxml         │
+│  generate → gpt-4.1  XSLT from scratch              │
+│  audit    → gpt-4.1  structured quality review      │
 └────────────────────────┬────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────┐
-│  Step 6: File Agent (file_agent.py)                  │
-│  Manages conversational memory. For explain intent, │
-│  the FileAgent wraps the LLM call and maintains    │
-│  full conversation history across turns.            │
-│  LLM CALL #3 (for explain/chat turns)              │
-└────────────────────────┬────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────┐
-│  Step 7: Usage Logging (usage_tracker.py)            │
-│  Every LLM call writes to logs/llm_usage.jsonl      │
-│  and updates the in-memory session accumulator.     │
-│  Token counts + cost shown live in the sidebar.    │
+│  Step 6: Usage Logging  (usage_tracker.py)           │
+│  Every LLM call writes to logs/llm_usage.jsonl.     │
+│  Token counts + cost shown live in the sidebar.     │
 └─────────────────────────────────────────────────────┘
 ```
 
-### Why multiple LLM calls per message?
+### LLM provider split
 
-A single user message triggers **2–3 LLM calls** internally:
-
-| Call | Module | Purpose | Typical tokens |
+| Task | Provider | Model | Why |
 |---|---|---|---|
-| #1 | `intent_router.py` | Classify what the user wants | ~300–500 |
-| #2 | `groq_agent.py` / engine | Generate the actual answer | ~5,000–15,000 |
-| #3 | `file_agent.py` | Conversational memory management | ~2,000–5,000 |
-
-This is why the **Session total** in the sidebar is always higher than a single call.
+| Intent routing | **Groq** | `llama-3.1-8b-instant` | 877 tok/s, $0.05/M — classification only |
+| Explain (tool-calling) | **OpenAI** | `gpt-4.1-mini` | 1 M-token context, strong function calling |
+| Modify (tool-calling) | **OpenAI** | `gpt-4.1` | Best for code diffs, SWE-bench 54.6% |
+| Simulate | **OpenAI** | `gpt-4.1-mini` | Code reasoning, cost-efficient |
+| Audit | **OpenAI** | `gpt-4.1` | Thorough structured analysis |
+| Generate | **OpenAI** | `gpt-4.1` | Top code generation quality |
 
 ---
 
@@ -372,29 +365,64 @@ Cost:   $0.000321 + $0.00537 + $0.0057 ≈ $0.0109  ✅  (matches UI)
 
 ---
 
+## Modify Pipeline — How Changes Are Applied
+
+```
+User: "Change all occurrences of sender ID 'ACME' to 'PARTNERLINQ'"
+         │
+         ▼  gpt-4.1 with XSLT tools
+  search_xslt("ACME")          ← finds all 4 locations across templates
+  get_call_chain("/")           ← checks what else is downstream
+  get_template("build_isa")     ← fetches exact source lines
+         │
+         ▼  LLM calls submit_patches()
+  patches = [
+    { "before": "...", "after": "...", "line_hint": 47 },
+    { "before": "...", "after": "...", "line_hint": 122 },
+    ...
+  ]
+         │
+         ▼  Python (no LLM)
+  verify all BEFOREs exist → abort if any missing  (all-or-nothing)
+  apply patches bottom-to-top (sorted by line_hint desc)
+  verify_patches_applied() → confirm every AFTER is present
+  validate_xslt_wellformed() → lxml XML parse check
+         │
+         ▼  UI response
+  ## Changes Made — 4/4 patches applied
+  1. ✓ Update sender ID in ISA template — line 47
+  2. ✓ Update sender ID in GS header — line 122
+  ...
+  ```diff
+  - <xsl:value-of select="'ACME'"/>
+  + <xsl:value-of select="'PARTNERLINQ'"/>
+  ```
+  --- AUTO-AUDIT appended by dispatcher ---
+  [Download Modified XSLT] button
+```
+
+**Key design decisions:**
+- Patches use plain `str.replace` (not DOM) — untouched lines stay byte-for-byte identical
+- Bottom-to-top application prevents line-number drift between patches
+- All-or-nothing: if any BEFORE is not found, nothing is changed
+- Fallback: if no XSLT index is built yet, the legacy single-patch path is used
+
+---
+
 ## Model Pricing Reference
 
 | Model | Provider | Input / 1M tokens | Output / 1M tokens |
 |---|---|---|---|
-| `llama-3.3-70b-versatile` | **Groq (current)** | $0.59 | $0.79 |
-| `gpt-4o-mini` | OpenAI | $0.15 | $0.60 |
-| `claude-3-5-haiku` | Anthropic | $0.80 | $4.00 |
-| `qwen2.5-72b-instruct` | Qwen (Together AI) | $0.90 | $0.90 |
+| `gpt-4.1` | OpenAI | $2.00 | $8.00 |
+| `gpt-4.1-mini` | OpenAI | $0.40 | $1.60 |
+| `gpt-4.1-nano` | OpenAI | $0.10 | $0.40 |
+| `llama-3.3-70b-versatile` | Groq | $0.59 | $0.79 |
+| `llama-3.1-8b-instant` | Groq | $0.05 | $0.08 |
+| `claude-3-5-haiku-20241022` | Anthropic | $0.80 | $4.00 |
 | `llama-3.3-70b-instruct` | Meta (NVIDIA NIM) | $0.77 | $0.77 |
 
-### Cost comparison for a typical session (17,810 tokens)
-
-Assuming a 80/20 input-to-output split (14,248 input / 3,562 output):
-
-| Model | Provider | Estimated cost |
-|---|---|---|
-| `gpt-4o-mini` | OpenAI | **$0.0049** (cheapest) |
-| `llama-3.3-70b-instruct` | Meta (NIM) | $0.0137 |
-| `llama-3.3-70b-versatile` | Groq (current) | $0.0112 |
-| `qwen2.5-72b-instruct` | Qwen | $0.0160 |
-| `claude-3-5-haiku` | Anthropic | $0.0256 (most expensive for high output) |
-
-> Groq offers the best balance of speed, cost, and quality for this use case.
+> **Intent routing** uses `llama-3.1-8b-instant` on Groq (fastest + cheapest for classification).  
+> **All other tasks** use OpenAI GPT-4.1 family, selected per task for best quality/cost balance.
 
 ---
 
@@ -488,11 +516,37 @@ Runs 31 checks covering:
 
 ## Environment Variables
 
+Copy `.env.example` to `.env` and fill in your keys. API keys are never shown in the UI.
+
+### API Keys
+
 | Variable | Required | Description |
 |---|---|---|
-| `GROQ_API_KEY` | Yes | Groq API key from console.groq.com |
-| `GROQ_MODEL` | No | Model name (default: `llama-3.3-70b-versatile`) |
-| `INTENT_ROUTER_THRESHOLD` | No | Confidence threshold 0.0–1.0 (default: `0.45`) |
+| `OPENAI_API_KEY` | **Yes** | OpenAI API key — powers explain, modify, simulate, audit, generate |
+| `GROQ_API_KEY` | **Yes** | Groq API key — powers intent routing (llama-3.1-8b-instant) |
+| `NVIDIA_API_KEY` | No | NVIDIA NIM key (optional fallback provider) |
+| `ANTHROPIC_API_KEY` | No | Anthropic key (legacy path, no tool calling) |
+
+### Provider-level model defaults
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_MODEL` | `gpt-4.1-mini` | Fallback when no per-engine override is set |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq fallback model |
+| `NVIDIA_MODEL` | `meta/llama-3.3-70b-instruct` | NVIDIA NIM model |
+| `ANTHROPIC_MODEL` | `claude-3-5-haiku-20241022` | Anthropic model |
+
+### Per-engine model overrides (take priority over provider defaults)
+
+| Variable | Default | Task |
+|---|---|---|
+| `EXPLAIN_MODEL` | `gpt-4.1-mini` | XSLT explain + tool-calling explore |
+| `MODIFY_MODEL` | `gpt-4.1` | XSLT patch generation |
+| `SIMULATE_MODEL` | `gpt-4.1-mini` | XSLT simulation analysis |
+| `AUDIT_MODEL` | `gpt-4.1` | XSLT quality audit |
+| `GENERATE_MODEL` | `gpt-4.1` | XSLT generation from scratch |
+| `INTENT_ROUTER_MODEL` | `llama-3.1-8b-instant` | Intent classification (Groq) |
+| `INTENT_ROUTER_THRESHOLD` | `0.45` | Min confidence score for active intent |
 
 ---
 
