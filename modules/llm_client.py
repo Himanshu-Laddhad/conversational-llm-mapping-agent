@@ -149,7 +149,7 @@ def chat_complete_with_tools(
     if provider not in PROVIDERS:
         raise ValueError(f"Unknown provider {provider!r}. Valid: {list(PROVIDERS)}")
 
-    from openai import OpenAI  # type: ignore
+    from openai import OpenAI, RateLimitError, APIStatusError, APIConnectionError  # type: ignore
 
     try:
         from .token_tracker import get_tracker
@@ -166,20 +166,42 @@ def chat_complete_with_tools(
 
     client = OpenAI(**kwargs)
 
+    _MAX_RETRIES  = 4
+    _BACKOFF_BASE = 2  # seconds: 2, 4, 8, 16
+
     # Work on a mutable copy so the caller's original list is not mutated.
     msgs = list(messages)
     last_text = ""
 
     for _round in range(max_tool_rounds):
+        # ── Retry loop for transient errors (429 rate-limit, 5xx, network) ──────
+        _last_exc: Optional[Exception] = None
+        response = None
         t0 = time.perf_counter()
-        response = client.chat.completions.create(
-            model=model,
-            messages=msgs,          # type: ignore[arg-type]
-            tools=tools,            # type: ignore[arg-type]
-            tool_choice="auto",
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        for _attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=msgs,          # type: ignore[arg-type]
+                    tools=tools,            # type: ignore[arg-type]
+                    tool_choice="auto",
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                break  # success
+            except RateLimitError as exc:
+                _last_exc = exc
+            except APIStatusError as exc:
+                if exc.status_code in (500, 502, 503, 529):
+                    _last_exc = exc
+                else:
+                    raise
+            except APIConnectionError as exc:
+                _last_exc = exc
+            if _attempt < _MAX_RETRIES:
+                time.sleep(_BACKOFF_BASE ** (_attempt + 1))
+        if response is None:
+            raise _last_exc  # type: ignore[misc]
         latency_ms = (time.perf_counter() - t0) * 1000
 
         choice = response.choices[0]

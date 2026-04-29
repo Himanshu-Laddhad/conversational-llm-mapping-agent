@@ -371,12 +371,18 @@ Start by fetching the entry-point templates, then explore the call chain and key
 
     def _trim_history(self) -> None:
         """Drop oldest non-system turns when the history char budget is exceeded."""
+        def _content_len(msg: dict) -> int:
+            # OpenAI messages may have `"content": null` when only tool_calls
+            # exist; .get("content", "") would still yield None → len(None) crashes.
+            c = msg.get("content")
+            return len(c) if isinstance(c, str) else 0
+
         system_msgs = [m for m in self.history if m.get("role") == "system"]
         turns       = [m for m in self.history if m.get("role") != "system"]
-        total = sum(len(m.get("content", "")) for m in system_msgs + turns)
+        total = sum(_content_len(m) for m in system_msgs + turns)
         while turns and total > self._MAX_HISTORY_CHARS:
             removed = turns.pop(0)
-            total -= len(removed.get("content", ""))
+            total -= _content_len(removed)
         self.history = system_msgs + turns
 
     def chat(

@@ -47,7 +47,7 @@ import re
 import time
 import difflib
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from dotenv import load_dotenv
 
 # Non-invasive audit logging (best-effort; never breaks dispatch()).
@@ -281,6 +281,7 @@ def dispatch(
     model: Optional[str] = None,
     session: Optional[Any] = None,
     provider: Optional[str] = None,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> dict:
     """
     Route a user message and call the appropriate engine(s).
@@ -307,6 +308,8 @@ def dispatch(
                         - RAG context is auto-injected from .rag_index/ if present
                       Pass the same Session object on every subsequent call
                       to maintain memory across turns.
+        on_progress: Optional callback invoked with short human-readable status
+                     strings as work advances (for UI progress indicators).
 
     Returns:
         {
@@ -328,6 +331,14 @@ def dispatch(
     _actor = getattr(session, "session_id", None) if session is not None else None
     _actor = str(_actor) if _actor else "system"
     forced_action = _classify_action(user_message)
+
+    def _progress(msg: str) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(msg)
+        except Exception:
+            pass
     try:
         from .intent_router import route
         from .file_ingestion import ingest_file
@@ -372,6 +383,9 @@ def dispatch(
     _all_new_paths: List[str] = list(file_paths or [])
     if file_path and file_path not in _all_new_paths:
         _all_new_paths.append(file_path)
+
+    if ingested is None and _all_new_paths:
+        _progress("Reading and parsing your uploaded file(s)…")
 
     if ingested is None:
         for p in _all_new_paths:
@@ -446,6 +460,7 @@ def dispatch(
     if session is not None and session.history:
         ctx = session.get_context_str()
         if ctx:
+            _progress("Including earlier messages from this chat for context…")
             _ctx_prefix = f"[PRIOR CONTEXT]\n{ctx}\n\n[CURRENT REQUEST]\n"
 
     # ── 3. Auto-inject RAG context — only when intent router says it's needed ────
@@ -467,9 +482,12 @@ def dispatch(
         or xslt_ingested is not None
     )
 
+    _progress("Preparing to interpret your question…")
+
     # ── 5. Classify user intent ───────────────────────────────────────────────
     # Direct compare mode for side-by-side XSLT comparison.
     if _is_compare_xslt_request(user_message) and session is not None:
+        _progress("Comparing XSLT mappings as you asked…")
         if len(session.xslt_revisions) >= 2:
             # Default: compare the two most recent consecutive revisions so the
             # diff reflects the latest change, not the entire history.
@@ -553,6 +571,10 @@ def dispatch(
             }
 
     if forced_action in {"modify", "simulate", "explain", "generate", "audit"}:
+        _progress(
+            f"Picked **{forced_action}** from keywords in your message — "
+            "skipping broad intent routing."
+        )
         route_result = {
             "scores": {
                 "explain":  1.0 if forced_action == "explain"  else 0.0,
@@ -570,6 +592,10 @@ def dispatch(
             "is_in_scope": True,    # pattern-classified actions are always in-scope
         }
     else:
+        _progress(
+            "Analyzing your message to choose explain, modify, simulate, audit, "
+            "or generate (intent routing)…"
+        )
         # Intent routing always uses Groq (llama-3.1-8b-instant) for speed and cost
         # efficiency — classification doesn't require the stronger OpenAI models.
         # Fall back to the active provider's key if no Groq key is configured.
@@ -623,6 +649,7 @@ def dispatch(
 
     # ── 5b. RAG context — query only when the router flagged needs_rag=True ─────
     if _rag_deferred and route_result.get("needs_rag", False):
+        _progress("Searching your indexed mappings for cross-file reference snippets…")
         try:
             _rag_text, _ = query_folder(
                 question=user_message,
@@ -638,6 +665,17 @@ def dispatch(
                 )
         except Exception:
             pass   # RAG failure is non-fatal — continue without it
+
+    _primary_intent = route_result.get("primary", "explain")
+    _engine_step_msg = {
+        "explain": "Explaining your mapping (main model — may take a little while)…",
+        "modify": "Updating the XSLT — locating the right code and applying your edits…",
+        "simulate": "Running your transform and interpreting the output…",
+        "audit": "Checking the mapping — automated rules plus AI scan…",
+        "generate": "Generating a new XSLT from your instructions…",
+        "compare": "Finishing comparison output…",
+    }.get(_primary_intent, "Working on your request…")
+    _progress(_engine_step_msg)
 
     # ── 6. Dispatch to each active engine in priority order ───────────────────
     responses: Dict[str, str] = {}
@@ -746,6 +784,7 @@ def dispatch(
                     model=_engine_model("simulate"),
                     provider=provider or "openai",
                     session=session,
+                    conversation_context=msg,
                 )
                 if (response or "").lstrip().startswith("[validation_only]"):
                     status = "validation_only"
@@ -887,6 +926,7 @@ def dispatch(
                 _audit_resp, _ = audit(
                     _audit_ingested,
                     context=response,
+                    conversation_context=msg,
                     api_key=api_key,
                     model=_engine_model("audit"),
                 )
@@ -924,6 +964,7 @@ def dispatch(
                 _audit_resp, _ = audit(
                     xslt_ingested,
                     context=response,
+                    conversation_context=(_ctx_prefix + user_message).strip() or None,
                     api_key=api_key,
                     model=_engine_model("audit"),
                 )
@@ -935,8 +976,10 @@ def dispatch(
                     "[audit] No active XSLT file selected."
                 )
             else:
+                _audit_focus = (_ctx_prefix + user_message).strip()
                 response, audit_dict = audit(
                     xslt_ingested,
+                    conversation_context=_audit_focus or None,
                     api_key=api_key,
                     model=_engine_model("audit"),
                 )

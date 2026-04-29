@@ -98,9 +98,9 @@ class Session:
     # Full turn history: list of dicts with keys intent / user / assistant.
     history: List[dict] = field(default_factory=list)
 
-    # How many characters of recent history to inject into non-explain prompts.
-    # Kept small to avoid blowing the token budget of the target engine.
-    max_context_chars: int = 3_000
+    # How many characters of recent history to inject into modify/simulate/audit/generate prompts.
+    # Large enough that prior explain turns (with code snippets) survive for follow-up "apply that".
+    max_context_chars: int = 24_000
 
     # Explicit file-role paths (source_path values from ingested metadata).
     active_xslt_file: Optional[str] = None
@@ -231,13 +231,16 @@ class Session:
             return self.active_target_file
         return None
 
-    def add_turn(self, intent: str, user_msg: str, response: str) -> None:
+    def add_turn(self, intent: str, user_msg: str, response: Optional[str]) -> None:
         """Record one completed dispatch turn in the history."""
-        _MAX_STORED = 1_500
+        resp = response if isinstance(response, str) else ""
+        # Must fit code-level prior turns (variables, XPath) used by downstream modify —
+        # 8000 chars avoids dropping the substantive tail.
+        _MAX_STORED = 8_000
         stored_response = (
-            response[:_MAX_STORED] + " …[truncated]"
-            if len(response) > _MAX_STORED
-            else response
+            resp[:_MAX_STORED] + " …[truncated]"
+            if len(resp) > _MAX_STORED
+            else resp
         )
         self.history.append({
             "intent":    intent,

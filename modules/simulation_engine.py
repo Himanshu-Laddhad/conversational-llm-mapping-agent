@@ -648,6 +648,7 @@ def simulate(
     model: Optional[str] = None,
     provider: str = "openai",
     session: Optional[Any] = None,
+    conversation_context: Optional[str] = None,
 ) -> Tuple[str, Any]:
     """
     Simulate / validate a mapping against source data.
@@ -666,6 +667,9 @@ def simulate(
         api_key:      LLM API key. Falls back to the provider's env var.
         model:        LLM model identifier. Falls back to the provider's env var,
                       then llama-3.3-70b-versatile.
+        session:      Optional session — revision summaries for local fallbacks.
+        conversation_context: Prior chat + current request (e.g. from dispatcher).
+                      Prepended to the LLM user message so analysis matches intent.
 
     Returns:
         (response_str, transform_output_xml_or_None) where response_str is the
@@ -774,6 +778,16 @@ def simulate(
         processor_used=processor_used,
         altova_detected=altova_detected,
     )
+    cc_raw = (conversation_context or "").strip()
+    if cc_raw:
+        cc_show = cc_raw[:6_000] + (" …" if len(cc_raw) > 6_000 else "")
+        user_message = (
+            "## Conversation context\n"
+            "(User's current request plus any prior-turn chat the app included. "
+            "Weigh this when analysing or simulating — e.g. focus on segments mentioned.)\n\n"
+            f"{cc_show}\n\n---\n\n"
+            + user_message
+        )
 
     # ── Step 6: Call LLM via unified client ───────────────────────────────────
     # When Saxon/lxml produced real output, use the concise analysis prompt

@@ -572,6 +572,7 @@ def _build_audit_dict(
 def audit(
     ingested: dict,
     context: Optional[str] = None,
+    conversation_context: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     provider: str = "openai",
@@ -583,6 +584,8 @@ def audit(
         ingested:  Output dict from file_ingestion.ingest_file().
         context:   Optional extra context string (e.g. output from modify or
                    generate engine) to give the LLM additional information.
+        conversation_context: Optional prior-turn chat + current user message
+                   (e.g. dispatcher ``[PRIOR CONTEXT]``) so focused audits match chat.
         api_key:   LLM API key. Falls back to the provider's env var.
         model:     LLM model. Falls back to the provider's env var,
                    then the provider's default model.
@@ -654,6 +657,15 @@ def audit(
         f"## Parsed Structure\n{parsed}\n",
         f"## Automated Rule Check Results\n{layer1_for_llm}\n",
     ]
+
+    convo = (conversation_context or "").strip()
+    if convo:
+        convo_show = convo[:4_000] + (" …" if len(convo) > 4_000 else "")
+        user_parts.append(
+            f"## Conversation context\n"
+            f"(User request and prior chat — focus on areas the user cares about.)\n"
+            f"{convo_show}\n"
+        )
 
     if context:
         ctx_preview = context[:1_000]

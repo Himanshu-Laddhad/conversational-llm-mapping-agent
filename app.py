@@ -1037,6 +1037,11 @@ with tab_chat:
                     _streamed_text = f"⚠️ Streaming error: {_se}"
                     st.markdown(_streamed_text)
 
+            # Streaming bypasses dispatch() — mirror its session.history update so
+            # modify/simulate/get_context_str still see prior explain turns (#fff).
+            _stored = _streamed_text if isinstance(_streamed_text, str) else ""
+            st.session_state.session.add_turn("explain", user_input, _stored)
+
             st.session_state.messages.append({"role": "user", "content": user_input})
             st.session_state.messages.append({
                 "role":     "assistant",
@@ -1048,7 +1053,7 @@ with tab_chat:
 
         st.session_state.messages.append({"role": "user", "content": user_input})
 
-        with st.spinner("Thinking…"):
+        with st.status("Working on your request…", expanded=True) as dsp:
             try:
                 result = dispatch(
                     user_message=user_input,
@@ -1056,11 +1061,17 @@ with tab_chat:
                     session=st.session_state.session,
                     provider=_active_provider,
                     api_key=_active_api_key or None,
+                    on_progress=dsp.write,
                 )
                 dispatch_error = None
             except Exception as ex:
-                result        = None
+                result         = None
                 dispatch_error = str(ex)
+            else:
+                try:
+                    dsp.update(label="Finished", state="complete")
+                except Exception:
+                    pass
 
         st.session_state.pending_paths = []
 
