@@ -85,6 +85,20 @@ SCORING RULES:
     audit=0.95, explain=0.20, simulate=0.15, modify=0.05, generate=0.0
 - Be precise. Don't inflate scores. 0.0 means the intent is truly absent.
 
+RAG RULE (needs_rag):
+Set "needs_rag": true ONLY if the question requires context from OTHER mapping
+files beyond the currently loaded file and the current conversation history.
+Signals that need_rag = true:
+  - "similar to", "like the 850 mapping", "how do other mappings handle"
+  - "compare to another file", "across all our mappings", "in any mapping"
+  - Referencing a file by name that is likely not the active file
+  - "what do we normally use", "our standard approach", "our template"
+Signals that need_rag = false (most questions fall here):
+  - Questions about the currently loaded XSLT/EDI file
+  - Comparing two versions of the same file (v1 vs v2 — uses session history)
+  - Modify, generate, simulate, or audit requests on the active file
+  - Any question answerable from the loaded file + conversation alone
+
 Return ONLY valid JSON, no markdown fences, no extra text:
 {
   "scores": {
@@ -100,7 +114,8 @@ Return ONLY valid JSON, no markdown fences, no extra text:
     "modify":   "<one phrase why this score>",
     "simulate": "<one phrase why this score>",
     "audit":    "<one phrase why this score>"
-  }
+  },
+  "needs_rag": <true|false>
 }"""
 
 # ── Intent metadata ───────────────────────────────────────────────────────────
@@ -109,7 +124,7 @@ INTENT_META = {
     "explain": {
         "label":       "Explain / Q&A",
         "description": "Answer questions about the mapping in plain English.",
-        "next_module": "groq_agent.explain()",
+        "next_module": "explain_agent.explain()",
     },
     "generate": {
         "label":       "Generate Mapping",
@@ -162,9 +177,10 @@ def route(
           "primary":        "explain",
           "is_multi":       True,
           "threshold_used": 0.45,
+          "needs_rag":      False,   # True only when cross-file context is required
         }
 
-    On failure returns safe fallback with explain active.
+    On failure returns safe fallback with explain active and needs_rag=False.
     """
     from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
     env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
@@ -189,7 +205,7 @@ def route(
             model=resolved_model,
             provider=provider,
             temperature=0.0,
-            max_tokens=250,
+            max_tokens=300,   # slightly larger to accommodate needs_rag field
             engine="intent_router",
         )
 
@@ -205,6 +221,7 @@ def route(
         parsed = json.loads(raw)
         scores    = parsed.get("scores", {})
         reasoning = parsed.get("reasoning", {})
+        needs_rag = bool(parsed.get("needs_rag", False))
 
         # Clamp all scores to [0.0, 1.0] and fill missing intents
         for intent in ALL_INTENTS:
@@ -229,6 +246,7 @@ def route(
             "primary":        active[0],
             "is_multi":       len(active) > 1,
             "threshold_used": threshold,
+            "needs_rag":      needs_rag,
         }
 
     except json.JSONDecodeError as e:
@@ -238,7 +256,7 @@ def route(
 
 
 def _fallback(error_msg: str, threshold: float) -> dict:
-    """Return a safe fallback result defaulting to explain."""
+    """Return a safe fallback result defaulting to explain, needs_rag=False."""
     scores = {i: 0.0 for i in ALL_INTENTS}
     scores["explain"] = 0.5
     return {
@@ -248,6 +266,7 @@ def _fallback(error_msg: str, threshold: float) -> dict:
         "primary":        "explain",
         "is_multi":       False,
         "threshold_used": threshold,
+        "needs_rag":      False,
         "error":          error_msg,
     }
 
@@ -288,8 +307,9 @@ if __name__ == "__main__":
         primary = result["primary"]
         multi   = result["is_multi"]
 
+        needs_rag = result.get("needs_rag", False)
         print(f"  MSG : {msg}")
-        print(f"  TAG : {'[MULTI-INTENT]' if multi else '[SINGLE-INTENT]'}  primary={primary.upper()}")
+        print(f"  TAG : {'[MULTI-INTENT]' if multi else '[SINGLE-INTENT]'}  primary={primary.upper()}  needs_rag={needs_rag}")
         print()
 
         for intent in ALL_INTENTS:

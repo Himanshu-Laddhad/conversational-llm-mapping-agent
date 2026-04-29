@@ -9,8 +9,8 @@ Pipeline
 2. Optionally load a sample source XML file to give the LLM real field names.
 3. Build an LLM prompt that instructs it to produce a functional XSLT 2.0 skeleton
    following the Altova MapForce style used across all MappingData files.
-4. Call Groq and return the full response as-is — the response contains the XSLT
-   code block followed by a short customisation guide.
+4. Call the configured LLM and return the full response as-is — the response
+   contains the XSLT code block followed by a short customisation guide.
 5. Return (response_str, None) — same shape as all other engines so the dispatcher
    treats them uniformly.
 
@@ -27,7 +27,7 @@ The LLM generates a functional XSLT SKELETON (~100–150 lines), not a full
 The skeleton is a valid, runnable starting point that the user can refine with
 the modify engine.
 
-Token budget (Groq on-demand, llama-3.3-70b-versatile at ~12 000 TPM):
+Token budget (default OpenAI gpt-4.1-mini):
   • System prompt    : ~400 tokens
   • User request     : ~200 tokens
   • Source XML sample: ≤ 4 000 chars ≈ 1 000 tokens
@@ -155,7 +155,7 @@ def generate(
     source_sample: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    provider: str = "groq",
+    provider: str = "openai",
 ) -> Tuple[str, Any]:
     """
     Generate a new XSLT 2.0 mapping stylesheet from a plain-English description.
@@ -168,9 +168,9 @@ def generate(
                              SourceFile.txt from MappingData). If provided, the
                              LLM sees real field names and generates more accurate
                              mappings.
-        api_key:             Groq API key. Falls back to GROQ_API_KEY env var.
-        model:               Groq model. Falls back to GROQ_MODEL env var,
-                             then llama-3.3-70b-versatile.
+        api_key:             LLM API key. Falls back to the provider's env var.
+        model:               LLM model. Falls back to the provider's env var,
+                             then the provider's default model.
 
     Returns:
         (response_str, None) where response_str contains:
@@ -184,13 +184,13 @@ def generate(
     if not generation_request or not generation_request.strip():
         raise ValueError("generation_request must be a non-empty string")
 
-    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
-    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
-    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS, get_default_model
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "OPENAI_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("OPENAI_API_KEY") or os.environ.get("GROQ_API_KEY")
     if not key:
         raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
+    resolved_model = model or get_default_model(provider, engine="generate")
 
     # ── Optionally load source XML sample ────────────────────────────────────
     source_text: Optional[str] = None

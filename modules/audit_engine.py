@@ -19,7 +19,7 @@ Layer 1 — Hardcoded rule checks (pure Python, no API call, instant):
     IF_NO_ELSE     xsl:if with no xsl:otherwise fallback
     ISA_QUALIFIER  ISA05/ISA07 qualifiers not in valid set
 
-Layer 2 — LLM dynamic checks (Groq, one API call):
+Layer 2 — LLM dynamic checks (one API call):
   Sends the XSLT content + Layer 1 findings to the LLM. Instructs it to find:
     - Subtle XPath logic errors (e.g. price / 100 unintentionally)
     - Conditions that silently drop required segments
@@ -137,50 +137,36 @@ _TEST_PATTERNS = re.compile(
 )
 
 _SYSTEM_PROMPT = """\
-You are a senior EDI/XSLT integration analyst performing a production-readiness audit \
-on an Altova MapForce XSLT 2.0 stylesheet.
+You are a senior EDI/XSLT analyst doing a production-readiness audit.
 
-You will receive:
-  1. The XSLT source (possibly truncated).
-  2. A list of findings already detected by automated rule checks (Layer 1).
+You will receive the XSLT source and any automated rule findings already detected.
 
-Your task: find ADDITIONAL issues that the automated rules missed. Focus on:
-  - Subtle XPath expressions that may cause wrong values (wrong field, \
-division/multiplication errors, off-by-one)
-  - xsl:if / xsl:choose conditions that could silently drop required EDI segments
-  - Placeholder or leftover test data the automated rules did not catch
-  - Cross-field inconsistencies (e.g. extended amount does not equal unit price x quantity)
-  - Non-obvious mapping decisions a new analyst should verify before production use
-  - Any D365 source field paths that look suspicious or are likely incorrect
-  - Sensitive numeric fields (currency amounts, order quantities, unit prices) that may \
-have wrong scale factors (e.g. cents vs dollars, thousands vs units)
+Your task: identify ADDITIONAL issues the automated rules missed.
+Report ONLY real problems — skip anything that looks correct.
 
-Return EXACTLY this format (no preamble, no extra commentary):
+Return EXACTLY this structure (no preamble, no extra text):
 
 ### DYNAMIC FINDINGS (LLM)
-- [RULE_ID] <one-sentence description of the finding and why it matters>
-(repeat for each finding, max 8)
-
-### QUESTIONS FOR YOU
-1. <specific yes/no or value-confirmation question for the user>
-(max 6 questions, ordered by severity — most critical first)
+- [SEV:FIELD] Action needed in one line — be specific, say what to fix.
+(max 5 items; CRITICAL = will break production, WARNING = should verify, INFO = low risk)
+(omit this section entirely if you find nothing new beyond the automated findings)
 
 ### QUESTIONS_JSON
 ```json
 [
   {
     "id": 1,
-    "question": "<same question as above>",
-    "field": "<EDI element or XPath field, e.g. ISA06 or IT104>",
+    "question": "<confirm or fix: one direct question>",
+    "field": "<EDI element, e.g. ISA06>",
     "severity": "<FAIL|WARNING|INFO>",
     "category": "<identity|numeric|datetime|logic|config>",
-    "current_value": "<hardcoded or derived value if known, else null>"
+    "current_value": "<hardcoded value if known, else null>"
   }
 ]
 ```
 
-Rules for the JSON block:
-  - id values must be sequential integers starting at 1.
+Rules:
+  - id values start at 1 and are sequential.
   - category "identity"  = partner IDs, sender/receiver, company codes
   - category "numeric"   = amounts, quantities, prices, unit conversions
   - category "datetime"  = dates, times, timestamps
@@ -294,41 +280,58 @@ def _run_rule_checks(ingested: dict) -> List[Finding]:
             ))
 
     # ── SE_COUNT: SE01 hardcoded or empty ────────────────────────────────────
-    if "SE01" in hc_map:
-        findings.append(Finding(
-            rule_id="SE_COUNT",
-            severity="FAIL",
-            message=(
-                f'Segment count SE01 is hardcoded as "{hc_map["SE01"]}" — '
-                f"this value will be wrong for transactions with a different "
-                f"number of segments. SE01 should be computed dynamically."
-            ),
-            layer="rule",
-        ))
-    elif raw_xml and re.search(r"<SE01>[^<]*</SE01>", raw_xml):
-        m = re.search(r"<SE01>([^<]*)</SE01>", raw_xml)
-        if m:
-            val = m.group(1).strip()
-            if val.isdigit():
-                findings.append(Finding(
-                    rule_id="SE_COUNT",
-                    severity="FAIL",
-                    message=(
-                        f'Segment count SE01 is hardcoded as "{val}" in raw XML — '
-                        f"should be computed dynamically."
-                    ),
-                    layer="rule",
-                ))
-            elif val == "":
-                findings.append(Finding(
-                    rule_id="SE_COUNT",
-                    severity="FAIL",
-                    message=(
-                        "Segment count SE01 is empty — it must be set to the actual "
-                        "number of segments in the transaction set before production use."
-                    ),
-                    layer="rule",
-                ))
+    # Only flag SE01 when it is literally a constant — skip if the XSLT has a
+    # dynamic computation (xsl:value-of, xsl:sequence, count(...), xsl:number)
+    # anywhere in the SE01 context.  False positives are common when the element
+    # is produced by an XSL instruction whose result is an integer.
+    _se01_dynamic = bool(
+        raw_xml and re.search(
+            r"<SE01\b[^>]*>.*?<xsl:",
+            raw_xml, re.DOTALL | re.IGNORECASE,
+        )
+    ) or bool(
+        raw_xml and re.search(
+            r"SE01.*?(?:xsl:value-of|xsl:sequence|xsl:number|count\s*\()",
+            raw_xml, re.DOTALL | re.IGNORECASE,
+        )
+    )
+
+    if not _se01_dynamic:
+        if "SE01" in hc_map:
+            findings.append(Finding(
+                rule_id="SE_COUNT",
+                severity="FAIL",
+                message=(
+                    f'Segment count SE01 is hardcoded as "{hc_map["SE01"]}" — '
+                    f"this value will be wrong for transactions with a different "
+                    f"number of segments. SE01 should be computed dynamically."
+                ),
+                layer="rule",
+            ))
+        elif raw_xml and re.search(r"<SE01>[^<]*</SE01>", raw_xml):
+            m = re.search(r"<SE01>([^<]*)</SE01>", raw_xml)
+            if m:
+                val = m.group(1).strip()
+                if val.isdigit():
+                    findings.append(Finding(
+                        rule_id="SE_COUNT",
+                        severity="FAIL",
+                        message=(
+                            f'Segment count SE01 is hardcoded as "{val}" in raw XML — '
+                            f"should be computed dynamically."
+                        ),
+                        layer="rule",
+                    ))
+                elif val == "":
+                    findings.append(Finding(
+                        rule_id="SE_COUNT",
+                        severity="FAIL",
+                        message=(
+                            "Segment count SE01 is empty — it must be set to the actual "
+                            "number of segments in the transaction set before production use."
+                        ),
+                        layer="rule",
+                    ))
 
     # ── GS_DATETIME: GS04 / GS05 hardcoded ───────────────────────────────────
     for field_name in ("GS04", "GS05"):
@@ -467,31 +470,18 @@ def _run_rule_checks(ingested: dict) -> List[Finding]:
 # ── Format Layer 1 findings for both the report and the LLM prompt ────────────
 
 def _format_layer1_for_report(findings: List[Finding]) -> str:
-    """Format Layer 1 findings into the CRITICAL / WARNINGS / INFO sections."""
-    fails    = [f for f in findings if f.severity == "FAIL"    and f.layer == "rule"]
-    warnings = [f for f in findings if f.severity == "WARNING" and f.layer == "rule"]
-    infos    = [f for f in findings if f.severity == "INFO"    and f.layer == "rule"]
+    """Format Layer 1 findings as a compact one-line-per-finding list."""
+    if not findings:
+        return ""   # nothing to show — callers check emptiness
 
     parts = []
-
-    if fails:
-        parts.append("### CRITICAL — must fix before production")
-        for f in fails:
-            parts.append(f"- [{f.rule_id}] {f.message}")
-
-    if warnings:
-        parts.append("### WARNINGS — review recommended")
-        for f in warnings:
-            parts.append(f"- [{f.rule_id}] {f.message}")
-
-    if infos:
-        parts.append("### INFO — for awareness")
-        for f in infos:
-            parts.append(f"- [{f.rule_id}] {f.message}")
-
-    if not parts:
-        parts.append("### No automated rule violations detected")
-
+    for f in findings:
+        icon = "🔴" if f.severity == "FAIL" else ("🟡" if f.severity == "WARNING" else "🔵")
+        # Truncate long messages to keep output concise
+        msg = f.message
+        if len(msg) > 120:
+            msg = msg[:117] + "..."
+        parts.append(f"{icon} **{f.rule_id}** — {msg}")
     return "\n".join(parts)
 
 
@@ -584,7 +574,7 @@ def audit(
     context: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    provider: str = "groq",
+    provider: str = "openai",
 ) -> Tuple[str, Dict]:
     """
     Audit an ingested mapping file for misconfigurations and risky patterns.
@@ -593,9 +583,9 @@ def audit(
         ingested:  Output dict from file_ingestion.ingest_file().
         context:   Optional extra context string (e.g. output from modify or
                    generate engine) to give the LLM additional information.
-        api_key:   Groq API key. Falls back to GROQ_API_KEY env var.
-        model:     Groq model. Falls back to GROQ_MODEL env var,
-                   then llama-3.3-70b-versatile.
+        api_key:   LLM API key. Falls back to the provider's env var.
+        model:     LLM model. Falls back to the provider's env var,
+                   then the provider's default model.
 
     Returns:
         Tuple of (prose_report: str, audit_dict: dict).
@@ -635,13 +625,13 @@ def audit(
     if "parsed_content" not in ingested:
         raise ValueError("ingested dict is missing 'parsed_content' key")
 
-    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
-    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
-    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS, get_default_model
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "OPENAI_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("OPENAI_API_KEY") or os.environ.get("GROQ_API_KEY")
     if not key:
         raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
+    resolved_model = model or get_default_model(provider, engine="audit")
 
     meta      = ingested.get("metadata", {})
     parsed    = ingested.get("parsed_content", {})
@@ -676,9 +666,9 @@ def audit(
         )
 
     user_parts.append(
-        "Please perform your dynamic analysis now. "
-        "Return the DYNAMIC FINDINGS, QUESTIONS FOR YOU, and QUESTIONS_JSON "
-        "sections exactly as specified in the system prompt."
+        "Perform your dynamic analysis now. "
+        "Return only real issues — omit the DYNAMIC FINDINGS section if nothing new was found. "
+        "Always include the QUESTIONS_JSON block even if empty ([])."
     )
 
     user_message = "\n".join(user_parts)
@@ -699,19 +689,44 @@ def audit(
     # Strip the QUESTIONS_JSON block from the displayed prose report
     questions_marker = "### QUESTIONS_JSON"
     json_idx = llm_full.find(questions_marker)
-    llm_prose = llm_full[:json_idx].strip() if json_idx != -1 else llm_full
+    llm_prose = llm_full[:json_idx].strip() if json_idx != -1 else llm_full.strip()
+
+    # Also strip a standalone "### QUESTIONS FOR YOU" section if present
+    q_prose_idx = llm_prose.find("### QUESTIONS FOR YOU")
+    if q_prose_idx != -1:
+        llm_prose = llm_prose[:q_prose_idx].strip()
+
+    # Remove any "DYNAMIC FINDINGS (LLM)" header — we prepend our own
+    llm_prose = re.sub(r"^###\s*DYNAMIC FINDINGS.*\n?", "", llm_prose, flags=re.IGNORECASE).strip()
 
     # Parse the structured questions for the audit_dict
     structured_questions = _parse_questions_json(llm_full)
 
-    # ── Assemble final prose report ───────────────────────────────────────────
-    report_parts = [
-        f"## AUDIT REPORT\nFile: {file_name}  |  Type: {file_type}",
-        "",
-        layer1_report,
-        "",
-        llm_prose,
-    ]
+    # ── Assemble compact prose report ─────────────────────────────────────────
+    fails    = [f for f in layer1_findings if f.severity == "FAIL"]
+    warnings = [f for f in layer1_findings if f.severity == "WARNING"]
+    n_issues = len(layer1_findings) + (len(llm_prose.splitlines()) if llm_prose else 0)
+
+    # One-line summary badge
+    summary_parts = []
+    if fails:
+        summary_parts.append(f"🔴 {len(fails)} critical")
+    if warnings:
+        summary_parts.append(f"🟡 {len(warnings)} warning")
+    if not fails and not warnings:
+        summary_parts.append("✅ No rule violations")
+    summary_line = f"**{file_name}** — " + "  ".join(summary_parts)
+
+    report_parts = [summary_line]
+
+    if layer1_report:
+        report_parts.append(layer1_report)
+
+    if llm_prose:
+        report_parts.append(llm_prose)
+
+    if not layer1_findings and not llm_prose:
+        report_parts.append("✅ No issues found. File appears production-ready.")
 
     prose_report = "\n".join(report_parts).strip()
     audit_dict   = _build_audit_dict(layer1_findings, structured_questions)
@@ -724,7 +739,7 @@ def audit_followup(
     answers: List[Dict],
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    provider: str = "groq",
+    provider: str = "openai",
 ) -> Tuple[str, None]:
     """
     Second-pass audit: verify the user's answers to the structured questions
@@ -736,8 +751,8 @@ def audit_followup(
                     "id"       (int)   — matches the question id from audit()
                     "question" (str)   — the original question text
                     "answer"   (str)   — the user's answer
-        api_key:  Groq API key. Falls back to GROQ_API_KEY env var.
-        model:    Groq model. Falls back to GROQ_MODEL env var.
+        api_key:  LLM API key. Falls back to the provider's env var.
+        model:    LLM model. Falls back to the provider's env var.
 
     Returns:
         (verification_report: str, None)
@@ -764,13 +779,13 @@ def audit_followup(
     if not isinstance(answers, list):
         raise TypeError(f"answers must be a list, got {type(answers).__name__}")
 
-    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
-    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
-    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS, get_default_model
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "OPENAI_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("OPENAI_API_KEY") or os.environ.get("GROQ_API_KEY")
     if not key:
         raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
+    resolved_model = model or get_default_model(provider, engine="audit")
 
     meta      = ingested.get("metadata", {})
     parsed    = ingested.get("parsed_content", {})

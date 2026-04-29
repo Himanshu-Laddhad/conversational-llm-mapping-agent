@@ -18,7 +18,7 @@ Record schema
 ─────────────
   {
     "timestamp":        "2026-04-16T14:23:00.123456+00:00",  # UTC ISO-8601
-    "provider":         "groq",
+    "provider":         "openai",
     "model":            "llama-3.3-70b-versatile",
     "caller":           "intent_router",      # module that triggered the call
     "prompt_tokens":    312,

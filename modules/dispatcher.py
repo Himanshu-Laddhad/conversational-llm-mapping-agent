@@ -14,7 +14,7 @@ Auto-RAG: if a .rag_index/ directory exists alongside this project, the
 dispatcher automatically queries it and prepends relevant context snippets to
 all engine prompts (non-fatal if the index is missing or query fails).
 
-Currently implemented:   explain  → groq_agent.explain()
+Currently implemented:   explain  → explain_agent.explain()
                          simulate → simulation_engine.simulate()
                          modify   → modification_engine.modify()
                          generate → xslt_generator.generate()
@@ -326,7 +326,7 @@ def dispatch(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     session: Optional[Any] = None,
-    provider: Optional[str] = None,   # accepted for forward-compat; currently Groq only
+    provider: Optional[str] = None,
 ) -> dict:
     """
     Route a user message and call the appropriate engine(s).
@@ -342,9 +342,9 @@ def dispatch(
         target_file:  Optional path to expected target/output contract file.
         ingested:     Pre-parsed dict from ingest_file(). If provided,
                       file_path and file_paths are ignored.
-        api_key:      Groq API key. Falls back to GROQ_API_KEY env var.
-        model:        Groq model used for all LLM calls. Falls back to
-                      GROQ_MODEL env var, then llama-3.3-70b-versatile.
+        api_key:      LLM API key. Falls back to the provider's env var.
+        model:        LLM model. Falls back to the provider's env var,
+                      then the provider's default model.
         session:      Optional Session instance (from modules.session).
                       When provided:
                         - all uploaded files are tracked across turns
@@ -367,7 +367,7 @@ def dispatch(
         }
 
     Raises:
-        ValueError: If no Groq API key is available.
+        ValueError: If no LLM API key is available for the active provider.
         FileNotFoundError: If a provided file path does not exist.
     """
     _t0 = time.time()
@@ -377,8 +377,8 @@ def dispatch(
     try:
         from .intent_router import route
         from .file_ingestion import ingest_file
-        from .groq_agent import explain
-        from .simulation_engine import simulate, compare_output_to_target, generate_autofix_suggestions
+        from .explain_agent import explain
+        from .simulation_engine import simulate, compare_output_to_target, generate_autofix_suggestions, audit_simulate_findings
         from .modification_engine import modify, extract_modify_guidance
         from .xslt_generator import generate
         from .audit_engine import audit
@@ -387,8 +387,8 @@ def dispatch(
     except ImportError:
         from intent_router import route          # fallback for standalone execution
         from file_ingestion import ingest_file
-        from groq_agent import explain
-        from simulation_engine import simulate, compare_output_to_target, generate_autofix_suggestions
+        from explain_agent import explain
+        from simulation_engine import simulate, compare_output_to_target, generate_autofix_suggestions, audit_simulate_findings
         from modification_engine import modify, extract_modify_guidance
         from xslt_generator import generate
         from audit_engine import audit           # type: ignore
@@ -481,24 +481,15 @@ def dispatch(
         if ctx:
             _ctx_prefix = f"[PRIOR CONTEXT]\n{ctx}\n\n[CURRENT REQUEST]\n"
 
-    # ── 3. Auto-inject RAG context if index exists ────────────────────────────
+    # ── 3. Auto-inject RAG context — only when intent router says it's needed ────
+    # needs_rag is set True by the LLM classifier when the question requires
+    # context from other files (e.g. "similar to our 850 mapping", "across all
+    # mappings"). In-file questions, version comparisons, and modify/simulate
+    # requests on the active file all get needs_rag=False — no wasted RAG call.
+    # NOTE: route_result is not yet available at this point; we defer the RAG
+    # query to after step 5 (classification) and apply it before step 6 (dispatch).
     _index_dir = Path(__file__).resolve().parent.parent / ".rag_index"
-    if _index_dir.exists():
-        try:
-            _rag_text, _ = query_folder(
-                question=user_message,
-                persist_dir=str(_index_dir),
-                top_k=3,
-                api_key=api_key,
-                model=resolved_model,
-            )
-            if _rag_text and "[no results]" not in _rag_text.lower():
-                _ctx_prefix = (
-                    f"[REFERENCE CONTEXT FROM SIMILAR MAPPINGS]\n{_rag_text}\n\n"
-                    + _ctx_prefix
-                )
-        except Exception:
-            pass   # RAG failure is non-fatal — continue without it
+    _rag_deferred = _index_dir.exists()   # will query after classification if needed
 
     # ── 4. Out-of-scope guardrail ─────────────────────────────────────────────
     # Reject questions clearly outside the EDI/XSLT domain before routing.
@@ -565,6 +556,8 @@ def dispatch(
                 "missing_target_segments": [],
                 "extra_output_segments": [],
                 "mismatched_fields": [],
+                "autofix_suggestions": [],
+                "simulate_audit_findings": [],
                 "xslt_compare_data": {
                     "risk_level": "info",
                     "diff_preview": "\n".join(rev_comp.get("diff_lines", [])[:240]),
@@ -604,6 +597,8 @@ def dispatch(
                 "missing_target_segments": [],
                 "extra_output_segments": [],
                 "mismatched_fields": [],
+                "autofix_suggestions": [],
+                "simulate_audit_findings": [],
                 "xslt_compare_data": comp,
                 "session": session,
                 "primary_file_name": xslt_files[-1].get("metadata", {}).get("filename", ""),
@@ -623,6 +618,7 @@ def dispatch(
             "primary": forced_action,
             "is_multi": False,
             "threshold_used": 0.45,
+            "needs_rag": False,   # pattern-classified actions never need cross-file RAG
         }
     else:
         # Intent routing always uses Groq (llama-3.1-8b-instant) for speed and cost
@@ -643,6 +639,24 @@ def dispatch(
                 provider=provider or "openai",
                 model=os.getenv("INTENT_ROUTER_MODEL"),
             )
+
+    # ── 5b. RAG context — query only when the router flagged needs_rag=True ─────
+    if _rag_deferred and route_result.get("needs_rag", False):
+        try:
+            _rag_text, _ = query_folder(
+                question=user_message,
+                persist_dir=str(_index_dir),
+                top_k=3,
+                api_key=api_key,
+                model=resolved_model,
+            )
+            if _rag_text and "[no results]" not in _rag_text.lower():
+                _ctx_prefix = (
+                    f"[REFERENCE CONTEXT FROM SIMILAR MAPPINGS]\n{_rag_text}\n\n"
+                    + _ctx_prefix
+                )
+        except Exception:
+            pass   # RAG failure is non-fatal — continue without it
 
     # ── 6. Dispatch to each active engine in priority order ───────────────────
     responses: Dict[str, str] = {}
@@ -665,6 +679,7 @@ def dispatch(
     extra_output_segments: List[str] = []
     mismatched_fields: List[Dict[str, Any]] = []
     autofix_suggestions: List[Dict[str, Any]] = []
+    simulate_audit_findings: List[Dict[str, Any]] = []
     modify_status: str = "completed"
     modify_guidance: Dict[str, Any] = {}
     status: str = ""
@@ -682,27 +697,28 @@ def dispatch(
                     "[explain] No active XSLT file selected."
                 )
             elif agent is not None:
-                # Session already has a live FileAgent — continue that conversation
-                response = agent.chat(
-                    _build_explain_prompt_with_roles(
-                        user_message=user_message,
-                        source_ingested=source_ingested,
-                        target_ingested=target_ingested,
-                    )
+                # Session already has a live FileAgent — continue that conversation.
+                # Prepend any RAG context so cross-file answers are grounded.
+                _explain_q = _build_explain_prompt_with_roles(
+                    user_message=user_message,
+                    source_ingested=source_ingested,
+                    target_ingested=target_ingested,
                 )
+                response = agent.chat(_ctx_prefix + _explain_q if _ctx_prefix else _explain_q)
                 responses[intent] = response
             else:
                 _xidx = (
                     session.get_xslt_index(resolved_xslt_path)
                     if session is not None else None
                 )
+                _explain_q = _build_explain_prompt_with_roles(
+                    user_message=user_message,
+                    source_ingested=source_ingested,
+                    target_ingested=target_ingested,
+                )
                 response, agent = explain(
                     xslt_ingested,
-                    question=_build_explain_prompt_with_roles(
-                        user_message=user_message,
-                        source_ingested=source_ingested,
-                        target_ingested=target_ingested,
-                    ),
+                    question=_ctx_prefix + _explain_q if _ctx_prefix else _explain_q,
                     api_key=api_key,
                     model=_engine_model("explain"),
                     provider=provider or "openai",
@@ -766,6 +782,12 @@ def dispatch(
                 mismatched_fields = comparison.get("mismatched_fields", [])
                 raw_xslt_for_fix = (simulate_ingested.get("parsed_content") or {}).get("raw_xml") or ""
                 autofix_suggestions = generate_autofix_suggestions(comparison, raw_xslt_for_fix)
+                simulate_audit_findings = audit_simulate_findings(
+                    comparison,
+                    raw_xslt_for_fix,
+                    output_xml=simulate_output or "",
+                    target_text=target_text or "",
+                )
 
                 match_line = ""
                 if target_match_status == "matches_target":
@@ -985,6 +1007,7 @@ def dispatch(
         "extra_output_segments": extra_output_segments,
         "mismatched_fields": mismatched_fields,
         "autofix_suggestions": autofix_suggestions,
+        "simulate_audit_findings": simulate_audit_findings,
         "xslt_compare_data": None,
         "status": status,
         "modify_status": modify_status,
@@ -1034,9 +1057,9 @@ def dispatch_folder(
         persist_dir:    Directory where the ChromaDB index is persisted.
         force_reindex:  If True, re-index all files even if already indexed.
         top_k:          Number of chunks to retrieve from the index (default 5).
-        api_key:        Groq API key. Falls back to GROQ_API_KEY env var.
-        model:          Groq model. Falls back to GROQ_MODEL env var,
-                        then llama-3.3-70b-versatile.
+        api_key:        LLM API key. Falls back to the provider's env var.
+        model:          LLM model. Falls back to the provider's env var,
+                        then the provider's default model.
 
     Returns:
         {

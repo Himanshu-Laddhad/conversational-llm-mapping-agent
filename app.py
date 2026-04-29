@@ -42,7 +42,16 @@ st.set_page_config(
 # ── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  .block-container { padding-top: 1.5rem; }
+  .block-container { padding-top: 2.5rem; }
+
+  /* prevent tab labels from being clipped by the container edge */
+  .stTabs [data-baseweb="tab-list"] {
+    margin-top: 0.25rem;
+    overflow: visible;
+  }
+  .stTabs [data-baseweb="tab"] {
+    overflow: visible;
+  }
 
   .badge {
     display: inline-block;
@@ -122,6 +131,8 @@ def _init_state() -> None:
         st.session_state.test_readiness_status = ""
     if "queued_user_prompt" not in st.session_state:
         st.session_state.queued_user_prompt = None
+    if "chat_agent" not in st.session_state:
+        st.session_state.chat_agent = None      # live FileAgent for streaming follow-ups
     if "token_stats" not in st.session_state:
         try:
             from modules.token_tracker import empty_session_stats
@@ -613,6 +624,7 @@ with st.sidebar:
         st.session_state.audit_dict     = None
         st.session_state.audit_ingested = None
         st.session_state.last_route     = None
+        st.session_state.chat_agent     = None
         from modules.token_tracker import empty_session_stats
         st.session_state.token_stats    = empty_session_stats()
         st.rerun()
@@ -714,7 +726,7 @@ with st.sidebar:
 # MAIN AREA — TABBED LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_chat, tab_review = st.tabs(["💬 Chat", "🧾 Review & Diff"])
+tab_chat, tab_review, tab_history = st.tabs(["💬 Chat", "🧾 Review & Diff", "📋 Revision History"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — CHAT
@@ -769,48 +781,56 @@ with tab_chat:
                         st.code(_diff_preview, language="diff")
             if role == "assistant" and msg.get("intent") == "simulate":
                 if msg.get("status") == "validation_only":
-                    st.info("🔍 XSLT Validation Mode")
-                    st.markdown(msg.get("content", ""))
-                    st.success("✅ XSLT syntax is valid and production-ready")
-                    st.warning("⚠️ Full transformation requires Saxon processor in production environment")
+                    st.info("XSLT Validation Mode — Saxon transform unavailable")
                 _status = msg.get("target_match_status", "")
                 _summary = msg.get("target_match_summary", "")
-                _missing = msg.get("missing_target_segments", []) or []
                 _extra = msg.get("extra_output_segments", []) or []
-                _mismatch = msg.get("mismatched_fields", []) or []
                 if _status:
-                    st.markdown("#### Target vs Output Comparison")
+                    st.markdown("#### Target Comparison")
                     if _status == "matches_target":
                         st.success(_summary or "Output matches target.")
                     elif _status == "partial_match":
                         st.warning(_summary or "Output partially matches target.")
                     elif _status == "does_not_match":
                         st.error(_summary or "Output does not match target.")
-                    else:
+                    elif _status != "no_target":
                         st.info(_summary or "Target comparison unavailable.")
-                    if _missing:
-                        st.write(f"Missing target segments: `{', '.join(_missing)}`")
                     if _extra:
-                        st.write(f"Extra output segments: `{', '.join(_extra)}`")
-                    if _mismatch:
-                        st.write("Mismatched fields:")
-                        for row in _mismatch[:12]:
-                            fld = row.get("field", "?")
-                            tgt = ", ".join(row.get("target", [])[:3]) or "(empty)"
-                            out = ", ".join(row.get("output", [])[:3]) or "(empty)"
-                            st.write(f"- `{fld}` target=`{tgt}` output=`{out}`")
-                _fixes = msg.get("autofix_suggestions", []) or []
-                if _fixes:
-                    st.markdown("#### Auto-fix suggestions")
-                    for i, fx in enumerate(_fixes[:8]):
-                        with st.expander(f"{i+1}. {fx.get('issue', 'Suggestion')}"):
-                            st.caption(f"XSLT line: `{fx.get('xslt_line', '?')}`")
-                            st.code(fx.get("current_code", ""), language="xml")
-                            st.code(fx.get("suggested_fix", ""), language="xml")
-                            st.write(fx.get("explanation", ""))
-                            if st.button("Apply this fix", key=f"apply_fix_{_msg_idx}_{i}"):
+                        st.caption(f"Extra output segments (not in target): `{', '.join(_extra)}`")
+
+                # ── Compact actionable findings table ──────────────────────────
+                _findings = msg.get("simulate_audit_findings", []) or []
+                if _findings:
+                    _crits = [f for f in _findings if f.get("severity") == "CRITICAL"]
+                    _warns = [f for f in _findings if f.get("severity") != "CRITICAL"]
+                    st.markdown(
+                        f"#### Issues Found &nbsp; "
+                        f"{'🔴 ' + str(len(_crits)) + ' critical' if _crits else ''}"
+                        f"{'  🟡 ' + str(len(_warns)) + ' warning' if _warns else ''}"
+                    )
+                    for i, fx in enumerate(_findings[:12]):
+                        sev_icon = "🔴" if fx.get("severity") == "CRITICAL" else "🟡"
+                        _c1, _c2, _c3 = st.columns([2, 4, 2])
+                        with _c1:
+                            st.markdown(
+                                f"{sev_icon} **{fx.get('field', '?')}**  \n"
+                                f"<span style='font-size:0.8em;color:gray'>"
+                                f"line {fx.get('xslt_line','?')} · {fx.get('issue_type','').replace('_',' ')}"
+                                f"</span>",
+                                unsafe_allow_html=True,
+                            )
+                        with _c2:
+                            out_v = fx.get("output_val", "")
+                            exp_v = fx.get("expected_val", "")
+                            st.markdown(
+                                f"`{out_v}` → `{exp_v}`",
+                                unsafe_allow_html=False,
+                            )
+                        with _c3:
+                            if st.button("Apply Fix", key=f"sim_fix_{_msg_idx}_{i}"):
                                 st.session_state.queued_user_prompt = fx.get("apply_prompt", "")
                                 st.rerun()
+                        st.divider()
             if role == "assistant" and msg.get("intent") == "modify":
                 _m_status = msg.get("modify_status", "")
                 _m_guidance = msg.get("modify_guidance", {}) or {}
@@ -1148,6 +1168,64 @@ with tab_review:
                 st.rerun()
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — REVISION HISTORY
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab_history:
+    st.markdown("### 📋 Revision History")
+    _revs = st.session_state.session.xslt_revisions if st.session_state.session else []
+
+    if not _revs:
+        st.info("No XSLT revisions yet. Modify an XSLT in the chat to start tracking changes.")
+    else:
+        st.caption(f"{len(_revs)} revision(s) in this session")
+
+        for _ri, _rev in enumerate(reversed(_revs)):
+            _rev_num = len(_revs) - _ri
+            _ts = getattr(_rev, "timestamp", "?")
+            _desc = getattr(_rev, "description", "") or "Modification"
+            _content = getattr(_rev, "content", "") or ""
+            _diff = getattr(_rev, "diff_text", None)
+
+            with st.expander(f"Rev {_rev_num} — {_ts}  ·  {_desc[:72]}"):
+                col_dl, col_apply = st.columns([2, 1])
+                with col_dl:
+                    st.download_button(
+                        label=f"Download Rev {_rev_num}",
+                        data=_content.encode("utf-8"),
+                        file_name=f"revision_{_rev_num}_{_ts.replace(':', '-')}.xml",
+                        mime="application/xml",
+                        key=f"dl_rev_{_rev_num}",
+                        use_container_width=True,
+                    )
+                with col_apply:
+                    if st.button(
+                        "Restore as active",
+                        key=f"restore_rev_{_rev_num}",
+                        help="Load this revision into the Review tab",
+                    ):
+                        st.session_state.review_after_xslt = _content
+                        st.session_state.review_before_xslt = (
+                            getattr(_revs[len(_revs) - _rev_num - 1], "content", "")
+                            if len(_revs) - _rev_num - 1 >= 0 else ""
+                        )
+                        st.session_state.review_rule_key = f"rev_{_rev_num}"
+                        st.success(f"Rev {_rev_num} loaded into Review & Diff tab.")
+                        st.rerun()
+
+                if _diff:
+                    st.markdown("**Diff vs previous revision:**")
+                    st.code(_diff[:3_000] + ("\n... [truncated]" if len(_diff) > 3_000 else ""), language="diff")
+                else:
+                    st.caption("(No diff available — this is the first revision)")
+
+                if _content:
+                    st.markdown("**Preview (first 30 lines):**")
+                    _preview_lines = _content.splitlines()[:30]
+                    st.code("\n".join(_preview_lines), language="xml")
+
+
 # ── Attachment popover (compact file upload near the chat input) ───────────────
 # Capture the uploader return value OUTSIDE the popover context so that
 # st.rerun() is never called from inside the popover block.  Calling rerun
@@ -1188,13 +1266,51 @@ if _inline_uploads:
 user_input = st.chat_input("Ask anything about your mapping files…")
 
 if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
-
     _active_provider = st.session_state.get("llm_provider", "openai")
-    # API keys are read exclusively from the .env file — no UI input field.
     from modules.llm_client import PROVIDERS as _PROVIDERS
     _env_key_name    = _PROVIDERS.get(_active_provider, {}).get("env_key", "OPENAI_API_KEY")
     _active_api_key  = os.getenv(_env_key_name) or os.getenv("OPENAI_API_KEY") or ""
+
+    # ── Streaming fast-path for explain follow-ups ─────────────────────────────
+    # When a FileAgent is already loaded from a previous explain turn AND the
+    # current message is not a hard action (modify/simulate/audit/generate),
+    # stream the response directly — tokens appear live, no dispatcher overhead.
+    _streaming_providers = {"openai", "groq"}
+    _non_explain_actions = {"modify", "simulate", "audit", "generate", "compare"}
+    _agent_for_stream    = st.session_state.get("chat_agent")
+
+    def _is_non_explain(msg: str) -> bool:
+        from modules.dispatcher import _classify_action
+        return _classify_action(msg) in _non_explain_actions
+
+    if (
+        _agent_for_stream is not None
+        and _active_provider in _streaming_providers
+        and not st.session_state.pending_paths
+        and not _is_non_explain(user_input)
+    ):
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        with st.chat_message("assistant"):
+            try:
+                _stream_gen    = _agent_for_stream.chat(user_input, stream=True)
+                _streamed_text = st.write_stream(_stream_gen)
+            except Exception as _se:
+                _streamed_text = f"⚠️ Streaming error: {_se}"
+                st.markdown(_streamed_text)
+
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        st.session_state.messages.append({
+            "role":     "assistant",
+            "content":  _streamed_text,
+            "intent":   "explain",
+            "file_used": "",
+        })
+        st.rerun()
+
+    # ── Standard (non-streaming) dispatch path ─────────────────────────────────
+    st.session_state.messages.append({"role": "user", "content": user_input})
 
     with st.spinner("Thinking…"):
         try:
@@ -1236,6 +1352,14 @@ if user_input:
         if result.get("audit_dict") is not None:
             st.session_state.audit_dict     = result["audit_dict"]
             st.session_state.audit_ingested = result.get("ingested")
+
+        # ── Cache FileAgent for streaming follow-up turns ─────────────────────
+        _result_agent = result.get("agent")
+        if _result_agent is not None and intent == "explain":
+            st.session_state.chat_agent = _result_agent
+        elif intent not in ("explain", "unknown"):
+            # Non-explain action — reset so next explain starts fresh
+            st.session_state.chat_agent = None
 
         # ── Auto-ingest patched/generated XSLT back into session ─────────────
 
@@ -1298,7 +1422,7 @@ if user_input:
             except Exception:
                 pass
 
-    st.session_state.messages.append({
+    _msg: dict = {
         "role":              "assistant",
         "content":           response_text,
         "intent":            intent,
@@ -1306,5 +1430,15 @@ if user_input:
         "download_xslt":     download_xslt,
         "download_filename": download_filename,
         "download_label":    download_label,
-    })
+    }
+    if result is not None and intent == "simulate":
+        _msg["status"]                  = result.get("status", "")
+        _msg["target_match_status"]     = result.get("target_match_status", "")
+        _msg["target_match_summary"]    = result.get("target_match_summary", "")
+        _msg["missing_target_segments"] = result.get("missing_target_segments", [])
+        _msg["extra_output_segments"]   = result.get("extra_output_segments", [])
+        _msg["mismatched_fields"]       = result.get("mismatched_fields", [])
+        _msg["autofix_suggestions"]     = result.get("autofix_suggestions", [])
+        _msg["simulate_audit_findings"] = result.get("simulate_audit_findings", [])
+    st.session_state.messages.append(_msg)
     st.rerun()

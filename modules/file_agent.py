@@ -2,8 +2,9 @@
 File Agent Module
 
 Accept an ingested dict from file_ingestion, maintain conversation history,
-and use Groq to explain the file and answer follow-up questions with full
-context retention.
+and use the configured LLM to explain the file and answer follow-up questions
+with full context retention. Supports OpenAI, Groq, NVIDIA NIM, and other
+providers via llm_client.
 """
 
 import json
@@ -22,19 +23,19 @@ class FileAgent:
     
     def __init__(
         self,
-        groq_api_key: Optional[str] = None,
+        api_key: Optional[str] = None,
         model: Optional[str] = None,
-        api_key: Optional[str] = None,       # alias used by groq_agent.py
-        provider: Optional[str] = None,      # accepted for compat; Groq only for now
+        groq_api_key: Optional[str] = None,  # backward-compat alias
+        provider: Optional[str] = None,
     ):
         """
         Initialize the FileAgent.
 
         Args:
-            groq_api_key: Groq API key (loads from .env if not provided)
-            api_key:      Alias for groq_api_key (used by collaborator groq_agent.py)
-            model:        Groq model to use. Falls back to GROQ_MODEL env var.
-            provider:     LLM provider string (accepted but ignored; Groq only).
+            api_key:      LLM API key. Falls back to the provider's env var.
+            model:        LLM model to use. Falls back to the provider's env var.
+            groq_api_key: Deprecated alias for api_key (kept for backward compat).
+            provider:     LLM provider — one of "openai", "groq", "nvidia_nim", etc.
         """
         # Load environment variables
         load_dotenv()
@@ -129,7 +130,6 @@ class FileAgent:
         # ── Legacy truncated-JSON path (all other file types) ─────────────
 
         # ── Token-budget enforcement ──────────────────────────────────────────
-        # Groq on-demand free tier: 12 000 TPM (tokens per minute).
         # 1 token ≈ 4 chars.  The system prompt + XSLT instructions already
         # consume ~2 000 tokens, leaving ~8 000 tokens for the file JSON.
         # Cap raw_xml/raw_text at 6 000 chars (~1 500 tokens) and the whole
@@ -389,15 +389,17 @@ Start by fetching the entry-point templates, then explore the call chain and key
         
         Args:
             user_message: User's message
-            stream: If True, return a generator that yields raw Groq chunks and
-                    automatically appends the full assembled reply to history once
-                    the stream is exhausted. If False, return full response string.
-        
+            stream: If True, return a generator that yields plain text token
+                    strings (compatible with st.write_stream). History is
+                    updated automatically once the stream is exhausted.
+                    Supported providers: openai, groq.
+                    If False (default), return the full response string.
+
         Returns:
-            If stream=False: response string
-            If stream=True: generator yielding Groq stream chunks; history is
-                            updated automatically — no need to call
-                            append_assistant_message() after consuming the stream.
+            If stream=False: response string.
+            If stream=True:  generator[str] — each yield is a text token.
+                             History is updated automatically; no need to call
+                             append_assistant_message() after consuming.
         """
         # Append user message to history then trim to stay within the char budget.
         self.history.append({
@@ -407,37 +409,55 @@ Start by fetching the entry-point templates, then explore the call chain and key
         self._trim_history()
 
         if stream:
-            # Streaming path: uses Groq SDK directly (streaming not yet abstracted
-            # in llm_client). Only used in non-main-app contexts; the primary
-            # dispatch/explain path always calls chat(stream=False).
-            from groq import Groq  # type: ignore
+            # ── Streaming path ────────────────────────────────────────────────
+            # Yields text token strings so callers can pass the generator
+            # directly to st.write_stream() or print tokens as they arrive.
+            # Supports OpenAI and Groq (both use the same OpenAI-compat SDK).
             t0 = time.perf_counter()
-            _stream_client = Groq(api_key=self._api_key)
-            completion = _stream_client.chat.completions.create(
+            _provider = self._provider
+
+            if _provider in ("openai",):
+                from openai import OpenAI  # type: ignore
+                _stream_client_obj = OpenAI(api_key=self._api_key)
+            elif _provider == "groq":
+                from groq import Groq  # type: ignore
+                _stream_client_obj = Groq(api_key=self._api_key)
+            else:
+                # Unsupported provider for streaming — fall back to non-streaming
+                return iter([self.chat(user_message, stream=False)])  # type: ignore[return-value]
+
+            # stream_options (include_usage) is supported by OpenAI SDK but
+            # not the current Groq SDK — pass only for OpenAI.
+            _extra_stream_kwargs = (
+                {"stream_options": {"include_usage": True}}
+                if _provider == "openai" else {}
+            )
+            completion = _stream_client_obj.chat.completions.create(
                 model=self.model,
                 messages=self.history,
                 stream=True,
-                stream_options={"include_usage": True},
+                **_extra_stream_kwargs,
             )
 
             def _stream_and_record():
-                chunks = []
+                chunks: list = []
                 last_usage = None
                 call_latency_ms = (time.perf_counter() - t0) * 1000
                 for chunk in completion:
                     text = chunk.choices[0].delta.content or "" if chunk.choices else ""
                     if text:
                         chunks.append(text)
+                        yield text          # ← yield plain text for st.write_stream()
                     if getattr(chunk, "usage", None) is not None:
                         last_usage = chunk.usage
-                    yield chunk
+                # Commit assembled reply to conversation history
                 self.history.append({
                     "role": "assistant",
                     "content": "".join(chunks),
                 })
                 if last_usage is not None:
                     log_usage(
-                        provider="groq",
+                        provider=_provider,
                         model=self.model,
                         caller="file_agent",
                         prompt_tokens=last_usage.prompt_tokens,
@@ -599,7 +619,7 @@ if __name__ == "__main__":
             
             # Create agent and load file
             agent = FileAgent()
-            print("[AGENT] Initializing File Agent with Groq...\n")
+            print("[AGENT] Initializing File Agent...\n")
             
             explanation = agent.load_file(ingested)
             print("[EXPLANATION] Initial file analysis:")
@@ -672,7 +692,7 @@ if __name__ == "__main__":
             
             # Create agent and load file
             agent = FileAgent()
-            print("[AGENT] Initializing File Agent with Groq...\n")
+            print("[AGENT] Initializing File Agent...\n")
             
             explanation = agent.load_file(ingested)
             print("[EXPLANATION] Initial file analysis:")

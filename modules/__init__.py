@@ -10,7 +10,7 @@ from .llm_client import chat_complete, PROVIDERS, DEFAULT_MODELS
 from .file_ingestion import ingest_file, UnsupportedFileTypeError
 from .file_agent import FileAgent
 from .intent_router import route, get_meta, INTENT_META, ALL_INTENTS
-from .groq_agent import explain
+from .explain_agent import explain
 from .simulation_engine import simulate
 from .modification_engine import modify
 from .xslt_generator import generate

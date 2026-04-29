@@ -81,7 +81,7 @@ def chat_complete(
     messages: List[Dict[str, str]],
     api_key: str,
     model: str,
-    provider: str = "groq",
+    provider: str = "openai",
     temperature: float = 0.1,
     max_tokens: int = 1_000,
     engine: str = "unknown",   # token tracking label
@@ -265,8 +265,13 @@ def _openai_compat_complete(
     max_tokens: int,
     engine: str = "unknown",
 ) -> str:
-    """Use the openai SDK (OpenAI-compatible endpoint) for Groq, OpenAI, NIM."""
-    from openai import OpenAI  # type: ignore
+    """Use the openai SDK (OpenAI-compatible endpoint) for Groq, OpenAI, NIM.
+
+    Retries up to 3 times with exponential backoff (2s, 4s, 8s) on transient
+    errors: rate-limit (429), server errors (500/502/503/529), and network
+    timeouts.  Non-transient errors (400, 401, 404) are raised immediately.
+    """
+    from openai import OpenAI, RateLimitError, APIStatusError, APIConnectionError  # type: ignore
 
     try:
         from .token_tracker import get_tracker
@@ -281,15 +286,39 @@ def _openai_compat_complete(
     if base_url:
         kwargs["base_url"] = base_url
 
-    t0 = time.perf_counter()
     client = OpenAI(**kwargs)
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,          # type: ignore[arg-type]
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    latency_ms = (time.perf_counter() - t0) * 1000
+
+    _MAX_RETRIES = 3
+    _BACKOFF_BASE = 2  # seconds: 2, 4, 8
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            t0 = time.perf_counter()
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,          # type: ignore[arg-type]
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            latency_ms = (time.perf_counter() - t0) * 1000
+            break  # success
+        except RateLimitError as exc:
+            last_exc = exc
+        except APIStatusError as exc:
+            # Retry on transient server-side errors; raise immediately on others
+            if exc.status_code in (500, 502, 503, 529):
+                last_exc = exc
+            else:
+                raise
+        except APIConnectionError as exc:
+            last_exc = exc
+
+        if attempt < _MAX_RETRIES:
+            wait = _BACKOFF_BASE ** (attempt + 1)
+            time.sleep(wait)
+    else:
+        raise last_exc  # type: ignore[misc]
 
     usage = getattr(response, "usage", None)
 

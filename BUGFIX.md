@@ -286,6 +286,32 @@ else:
 
 ---
 
+### B20 — `simulation_engine.py`: wrong model resolved for non-Groq providers
+
+**Severity:** HIGH  
+**Symptom:** `simulate()` always called the OpenAI endpoint with `llama-3.3-70b-versatile`, causing a `404 model_not_found` error when `provider="openai"`. The error was caught and the simulation fell back to `[validation_only]`, making it appear Saxon had failed.
+
+**Root cause:** `resolved_model` was built as:
+```python
+resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, ...)
+```
+The `os.getenv("GROQ_MODEL")` shortcut resolved before the provider-aware lookup, so OpenAI calls always received a Groq model name.
+
+**Fix:** Replaced the ad-hoc lookup with the engine-aware `get_default_model(provider, engine="simulate")` helper from `llm_client.py`, which checks `SIMULATE_MODEL` → `<PROVIDER>_MODEL` → hardcoded default in the correct order.
+
+---
+
+### B21 — `simulation_engine.py`: Saxon transform result discarded on LLM failure
+
+**Severity:** HIGH  
+**Symptom:** When Saxon-HE successfully produced an XSLT transform result but the subsequent LLM analysis call failed (e.g. due to B20), the Saxon XML output was silently discarded. The function returned `(validation_only_text, None)` instead of `(validation_only_text, xslt_result_xml)`.
+
+**Root cause:** The LLM exception handler at line 611 hard-coded `None` as the second return value, ignoring the `xslt_result_xml` variable that had already been populated by Saxon.
+
+**Fix:** Changed `return f"[validation_only]\n{summary}", None` to `return f"[validation_only]\n{summary}", xslt_result_xml` so the real transform output is preserved even when the LLM annotation step fails.
+
+---
+
 ## Backward Compatibility
 
 All fixes are additive or narrow in scope. No public API signatures changed. No new dependencies introduced. All existing file types, intent routing, and session behavior are unaffected.

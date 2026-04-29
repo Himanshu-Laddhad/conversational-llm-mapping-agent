@@ -345,20 +345,20 @@ def query_folder(
     top_k: int = _DEFAULT_TOP_K,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    provider: str = "groq",
+    provider: str = "openai",
 ) -> Tuple[str, Any]:
     """
     Embed a question, retrieve the top-K most relevant mapping file chunks
-    from ChromaDB, and ask Groq to answer based on those chunks.
+    from ChromaDB, and ask the configured LLM to answer based on those chunks.
 
     Args:
         question:          The user's question about the indexed mapping files.
         persist_dir:       ChromaDB persist directory (must match index_folder).
         collection_name:   ChromaDB collection name (must match index_folder).
         top_k:             Number of chunks to retrieve (default 5).
-        api_key:           Groq API key. Falls back to GROQ_API_KEY env var.
-        model:             Groq model. Falls back to GROQ_MODEL env var,
-                           then llama-3.3-70b-versatile.
+        api_key:           LLM API key. Falls back to the provider's env var.
+        model:             LLM model. Falls back to the provider's env var,
+                           then the provider's default model.
 
     Returns:
         (response_str, None) — same shape as all other engines.
@@ -369,13 +369,13 @@ def query_folder(
     if not question or not question.strip():
         raise ValueError("question must be a non-empty string")
 
-    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS
-    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "GROQ_API_KEY")
-    key = api_key or os.environ.get(env_key_name) or os.environ.get("GROQ_API_KEY")
+    from .llm_client import chat_complete, DEFAULT_MODELS, PROVIDERS, get_default_model
+    env_key_name = PROVIDERS.get(provider, {}).get("env_key", "OPENAI_API_KEY")
+    key = api_key or os.environ.get(env_key_name) or os.environ.get("OPENAI_API_KEY") or os.environ.get("GROQ_API_KEY")
     if not key:
         raise ValueError(f"API key required for provider {provider!r}.")
 
-    resolved_model = model or os.getenv("GROQ_MODEL") or DEFAULT_MODELS.get(provider, "llama-3.3-70b-versatile")
+    resolved_model = model or get_default_model(provider, engine="rag")
 
     try:
         import chromadb
