@@ -53,6 +53,41 @@ st.markdown("""
     overflow: visible;
   }
 
+  /* ── Compact sidebar ── */
+  section[data-testid="stSidebar"] > div:first-child {
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.5rem !important;
+  }
+  section[data-testid="stSidebar"] .stButton > button {
+    padding: 0.25rem 0.5rem !important;
+    font-size: 0.8rem !important;
+    min-height: 1.8rem !important;
+  }
+  section[data-testid="stSidebar"] .stSelectbox > div,
+  section[data-testid="stSidebar"] .stTextInput > div {
+    margin-bottom: 0 !important;
+  }
+  section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div {
+    gap: 0.25rem !important;
+  }
+  section[data-testid="stSidebar"] hr {
+    margin: 0.4rem 0 !important;
+  }
+  section[data-testid="stSidebar"] .stCaption,
+  section[data-testid="stSidebar"] p {
+    margin-bottom: 0.15rem !important;
+    font-size: 0.8rem !important;
+  }
+  section[data-testid="stSidebar"] [data-testid="stMetric"] {
+    padding: 0.2rem 0 !important;
+  }
+  section[data-testid="stSidebar"] [data-testid="stMetricValue"] {
+    font-size: 1rem !important;
+  }
+  section[data-testid="stSidebar"] [data-testid="stExpander"] {
+    margin-bottom: 0.2rem !important;
+  }
+
   .badge {
     display: inline-block;
     padding: 2px 10px;
@@ -162,43 +197,176 @@ if "current_user" not in st.session_state:
 if not st.session_state.logged_in:
     st.markdown("""
     <style>
-      .block-container { max-width: 480px !important; padding-top: 4rem; }
+      /* ── Full-page dark canvas ── */
+      .stApp {
+        background: linear-gradient(135deg, #05050f 0%, #0d0522 40%, #060f1f 100%) !important;
+      }
+      .block-container {
+        max-width: 460px !important;
+        padding-top: 7vh !important;
+        padding-bottom: 0 !important;
+      }
       section[data-testid="stSidebar"] { display: none; }
+      header[data-testid="stHeader"]   { background: transparent !important; }
+      #MainMenu, footer                { visibility: hidden; }
+
+      /* ── Keyframe animations ── */
+      @keyframes fadeSlideUp {
+        from { opacity: 0; transform: translateY(28px); }
+        to   { opacity: 1; transform: translateY(0);    }
+      }
+      @keyframes shimmer {
+        0%   { background-position: -300% center; }
+        100% { background-position:  300% center; }
+      }
+      @keyframes softPulse {
+        0%, 100% { box-shadow: 0 0 0px rgba(206,184,136,0); }
+        50%      { box-shadow: 0 0 32px rgba(206,184,136,0.18); }
+      }
+      @keyframes orbFloat {
+        0%, 100% { transform: translateY(0px)   scale(1);    opacity: 0.18; }
+        50%      { transform: translateY(-18px) scale(1.04); opacity: 0.28; }
+      }
+
+      /* ── Decorative orbs ── */
+      .login-orb1, .login-orb2, .login-orb3 {
+        position: fixed; border-radius: 50%;
+        pointer-events: none; z-index: 0;
+        filter: blur(60px);
+      }
+      .login-orb1 {
+        width: 320px; height: 320px;
+        background: radial-gradient(circle, #CEB888 0%, transparent 70%);
+        top: -80px; right: -80px;
+        animation: orbFloat 8s ease-in-out infinite;
+      }
+      .login-orb2 {
+        width: 240px; height: 240px;
+        background: radial-gradient(circle, #4a90d9 0%, transparent 70%);
+        bottom: 10%; left: -60px;
+        animation: orbFloat 11s ease-in-out infinite reverse;
+      }
+      .login-orb3 {
+        width: 180px; height: 180px;
+        background: radial-gradient(circle, #9b59b6 0%, transparent 70%);
+        bottom: 30%; right: 5%;
+        animation: orbFloat 9s ease-in-out infinite 2s;
+      }
+
+      /* ── Login card ── */
+      .login-card {
+        position: relative; z-index: 1;
+        background: rgba(255,255,255,0.038);
+        border: 1px solid rgba(206,184,136,0.22);
+        border-radius: 22px;
+        padding: 2.8rem 2.5rem 2.2rem;
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        animation: fadeSlideUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) both,
+                   softPulse 4s ease-in-out 0.75s infinite;
+        margin-bottom: 1rem;
+      }
+
+      /* ── Heading ── */
+      .login-heading {
+        font-size: 1.85rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        background: linear-gradient(90deg, #CEB888 0%, #fffbe6 40%, #CEB888 70%, #e8d5a3 100%);
+        background-size: 300% auto;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: shimmer 4s linear infinite;
+        text-align: center;
+        margin: 0 0 0.45rem;
+        line-height: 1.15;
+      }
+      .login-sub {
+        color: #ffffff;
+        font-size: 8.75rem;
+        font-weight: 700;
+        text-align: center;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        margin: 0 0 2.2rem;
+      }
+
+      /* ── Input fields ── */
+      .stTextInput > label { color: rgba(220,220,255,0.7) !important; font-size: 0.8rem !important; }
+      .stTextInput > div > div > input {
+        background: rgba(255,255,255,0.06) !important;
+        border: 1px solid rgba(206,184,136,0.25) !important;
+        border-radius: 10px !important;
+        color: #f0eadc !important;
+        padding: 0.6rem 1rem !important;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      .stTextInput > div > div > input:focus {
+        border-color: rgba(206,184,136,0.65) !important;
+        box-shadow: 0 0 0 3px rgba(206,184,136,0.12) !important;
+        outline: none !important;
+      }
+      .stTextInput > div > div > input::placeholder { color: rgba(200,190,170,0.35) !important; }
+
+      /* ── Sign-in button ── */
+      .stFormSubmitButton > button, div[data-testid="stFormSubmitButton"] > button {
+        background: linear-gradient(135deg, #CEB888 0%, #a8904f 100%) !important;
+        color: #0a0a0a !important;
+        font-weight: 700 !important;
+        font-size: 0.92rem !important;
+        letter-spacing: 0.06em !important;
+        border: none !important;
+        border-radius: 11px !important;
+        padding: 0.7rem 1.5rem !important;
+        transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s !important;
+        box-shadow: 0 4px 18px rgba(206,184,136,0.3) !important;
+        width: 100% !important;
+        margin-top: 0.5rem !important;
+      }
+      .stFormSubmitButton > button:hover, div[data-testid="stFormSubmitButton"] > button:hover {
+        opacity: 0.88 !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 6px 24px rgba(206,184,136,0.45) !important;
+      }
+
+      /* ── Error ── */
+      div[data-testid="stAlert"] {
+        background: rgba(220,50,50,0.12) !important;
+        border: 1px solid rgba(220,80,80,0.3) !important;
+        border-radius: 10px !important;
+        color: #ffaaaa !important;
+      }
     </style>
+
+    <!-- decorative ambient orbs -->
+    <div class="login-orb1"></div>
+    <div class="login-orb2"></div>
+    <div class="login-orb3"></div>
+    <div class="login-card">
+      <p class="login-heading">PurdueXPartnerLinQ</p>
+      <p class="login-sub">Conversational Mapping Agent</p>
+    </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("## 🔗 PartnerLinQ")
-    st.markdown("**Conversational Mapping Intelligence Agent**")
-    st.divider()
-
-    st.markdown("##### Quick sign in")
-    cols = st.columns(2)
-    presets = list(PRESET_USERS.items())
-    for i, (email, info) in enumerate(presets):
-        col = cols[i % 2]
-        if col.button(f"{info['name']} — {info['role']}", key=f"preset_{i}", use_container_width=True):
-            st.session_state.logged_in = True
-            st.session_state.current_user = {"email": email, **info}
-            st.rerun()
-
-    st.divider()
-    st.markdown("##### Or sign in manually")
-
     with st.form("login_form"):
-        name      = st.text_input("Full name", placeholder="Your name")
-        email     = st.text_input("Email address", placeholder="you@example.com")
-        password  = st.text_input("Password", type="password", placeholder="••••••••")
-        submitted = st.form_submit_button("Sign in →", use_container_width=True, type="primary")
+        name     = st.text_input("Name", placeholder="Your name")
+        password = st.text_input("Access key", type="password", placeholder="••••••••")
+        submitted = st.form_submit_button("Sign In →", use_container_width=True, type="primary")
 
         if submitted:
             if password != DEMO_PASSWORD:
-                st.error("Incorrect password.")
-            elif not name or not email:
-                st.error("Please enter your name and email.")
+                st.error("Incorrect access key.")
+            elif not name.strip():
+                st.error("Please enter your name.")
             else:
-                role = PRESET_USERS.get(email, {}).get("role", "Guest User")
-                st.session_state.logged_in = True
-                st.session_state.current_user = {"name": name, "email": email, "role": role}
+                st.session_state.logged_in     = True
+                st.session_state.reviewer_name = name.strip()
+                st.session_state.current_user  = {
+                    "name": name.strip(),
+                    "email": f"{name.strip().lower().replace(' ','.')}@partnerlinq.com",
+                    "role": "EDI Analyst",
+                }
                 st.rerun()
 
     st.stop()
@@ -410,47 +578,98 @@ _data_dir  = Path(__file__).resolve().parent / "data"
 _index_dir = Path(__file__).resolve().parent / ".rag_index"
 
 with st.sidebar:
-    st.markdown("## PartnerLinQ")
-    st.caption("Conversational Mapping Intelligence Agent")
-    st.divider()
+    st.markdown("""
+    <style>
+      @keyframes sb-shimmer {
+        0%   { background-position: -300% center; }
+        100% { background-position:  300% center; }
+      }
+      .sb-card {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(206,184,136,0.22);
+        border-radius: 12px;
+        padding: 0.75rem 1rem 0.65rem;
+        margin-bottom: 0.5rem;
+      }
+      .sb-heading {
+        font-size: 1rem;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+        background: linear-gradient(90deg, #CEB888 0%, #fffbe6 40%, #CEB888 70%, #e8d5a3 100%);
+        background-size: 300% auto;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: sb-shimmer 4s linear infinite;
+        margin: 0 0 0.15rem;
+        line-height: 1.2;
+      }
+      .sb-sub {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: #ffffff;
+        letter-spacing: 0.06em;
+        margin: 0;
+        line-height: 1.3;
+      }
+    </style>
+    <div class="sb-card">
+      <p class="sb-heading">PartnerLinQ × Purdue</p>
+      <p class="sb-sub">Conversational Mapping Agent</p>
+    </div>
+    """, unsafe_allow_html=True)
+    # ── card CSS (shared for all sidebar cards) ──────────────────────────────
+    st.markdown("""
+    <style>
+      .sb-section-card {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px;
+        padding: 0.6rem 0.8rem 0.5rem;
+        margin-bottom: 0.45rem;
+      }
+      .sb-section-title {
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: rgba(206,184,136,0.85);
+        margin: 0 0 0.35rem;
+      }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # ── Logged-in user ────────────────────────────────────────────────────────
+    # ── USER card ─────────────────────────────────────────────────────────────
     user = st.session_state.current_user
     if user:
-        st.markdown(f"**{user['name']}**  \n*{user['role']}*")
-        if st.button("Sign out", use_container_width=True):
-            from modules.usage_tracker import reset_session_stats
-            reset_session_stats()
-            for key in ["logged_in", "current_user", "session", "messages",
-                        "active_files", "pending_paths", "audit_dict",
-                        "audit_ingested", "last_route", "llm_provider",
-                        "active_xslt_file", "active_source_file", "active_target_file"]:
-                st.session_state.pop(key, None)
-            st.rerun()
-    st.divider()
+        with st.container():
+            st.markdown('<div class="sb-section-card"><p class="sb-section-title">Signed in</p></div>', unsafe_allow_html=True)
+            st.caption(f"👤 **{user['name']}** · {user['role']}")
+            if st.button("Sign out", use_container_width=True):
+                from modules.usage_tracker import reset_session_stats
+                reset_session_stats()
+                for key in ["logged_in", "current_user", "session", "messages",
+                            "active_files", "pending_paths", "audit_dict",
+                            "audit_ingested", "last_route", "llm_provider",
+                            "active_xslt_file", "active_source_file", "active_target_file"]:
+                    st.session_state.pop(key, None)
+                st.rerun()
 
-    # ── LLM Provider ──────────────────────────────────────────────────────────
+    # ── LLM PROVIDER card ─────────────────────────────────────────────────────
     from modules.llm_client import PROVIDERS, DEFAULT_MODELS
 
-    st.markdown("**LLM Provider**")
-
-    # Only show providers whose API key is present in the environment.
+    st.markdown('<div class="sb-section-card"><p class="sb-section-title">🤖 LLM Provider</p></div>', unsafe_allow_html=True)
     _provider_options = [
         p for p in PROVIDERS
         if os.getenv(PROVIDERS[p].get("env_key", ""))
     ]
     if not _provider_options:
-        st.warning("No API keys found in `.env`. Add at least one key to use the agent.")
-        st.divider()
+        st.warning("No API keys found in `.env`.")
     else:
         _provider_labels = [PROVIDERS[p]["label"] for p in _provider_options]
-
-        # If the previously selected provider lost its key, fall back to the first available.
         if st.session_state.llm_provider not in _provider_options:
             st.session_state.llm_provider = _provider_options[0]
-
         _current_idx = _provider_options.index(st.session_state.llm_provider)
-
         _selected_label = st.selectbox(
             "Provider",
             options=_provider_labels,
@@ -462,22 +681,17 @@ with st.sidebar:
         if _selected_provider != st.session_state.llm_provider:
             st.session_state.llm_provider = _selected_provider
             st.rerun()
-
         _default_model = DEFAULT_MODELS.get(_selected_provider, "—")
         st.caption(f"Model: `{_default_model}`")
-        st.divider()
 
-    # ── Active file list ───────────────────────────────────────────────────────
-    st.markdown("**Files in session**")
+    # ── FILES card ────────────────────────────────────────────────────────────
+    st.markdown('<div class="sb-section-card"><p class="sb-section-title">📂 Files in session</p></div>', unsafe_allow_html=True)
     if st.session_state.active_files:
         to_remove = None
         for i, af in enumerate(st.session_state.active_files):
             col_name, col_btn = st.columns([5, 1])
             with col_name:
-                st.markdown(
-                    f'<div class="file-chip">{af["name"]}</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f'<div class="file-chip">{af["name"]}</div>', unsafe_allow_html=True)
             with col_btn:
                 if st.button("x", key=f"rm_{i}", help=f"Remove {af['name']}"):
                     to_remove = i
@@ -500,11 +714,11 @@ with st.sidebar:
             _sync_role_paths_to_session()
             st.rerun()
     else:
-        st.caption("No files — attach via the paperclip in chat.")
+        st.caption("No files — attach via 📎 in chat.")
 
-    # ── Explicit role selectors ───────────────────────────────────────────────
+    # ── FILE ROLES card ───────────────────────────────────────────────────────
     _all_files = st.session_state.active_files
-    _all_opts = ["(none)"] + [af["path"] for af in _all_files]
+    _all_opts  = ["(none)"] + [af["path"] for af in _all_files]
     _all_labels = {"(none)": "(none)"}
     for af in _all_files:
         _all_labels[af["path"]] = af["name"]
@@ -523,202 +737,71 @@ with st.sidebar:
             return options.index(current)
         return 0
 
-    st.markdown("**File Roles**")
-    _selected_xslt = st.selectbox(
-        "XSLT file selector",
-        options=_xslt_opts,
-        format_func=lambda v: _all_labels.get(v, v),
-        index=_select_index(_xslt_opts, st.session_state.get("active_xslt_file")),
-        key="role_select_xslt",
-    )
-    _selected_source = st.selectbox(
-        "Source file selector",
-        options=_all_opts,
-        format_func=lambda v: _all_labels.get(v, v),
-        index=_select_index(_all_opts, st.session_state.get("active_source_file")),
-        key="role_select_source",
-    )
-    _selected_target = st.selectbox(
-        "Target file selector",
-        options=_all_opts,
-        format_func=lambda v: _all_labels.get(v, v),
-        index=_select_index(_all_opts, st.session_state.get("active_target_file")),
-        key="role_select_target",
-    )
+    with st.expander("📁 File Roles", expanded=False):
+        _selected_xslt = st.selectbox(
+            "XSLT",
+            options=_xslt_opts,
+            format_func=lambda v: _all_labels.get(v, v),
+            index=_select_index(_xslt_opts, st.session_state.get("active_xslt_file")),
+            key="role_select_xslt",
+        )
+        _selected_source = st.selectbox(
+            "Source XML",
+            options=_all_opts,
+            format_func=lambda v: _all_labels.get(v, v),
+            index=_select_index(_all_opts, st.session_state.get("active_source_file")),
+            key="role_select_source",
+        )
+        _selected_target = st.selectbox(
+            "Target XML",
+            options=_all_opts,
+            format_func=lambda v: _all_labels.get(v, v),
+            index=_select_index(_all_opts, st.session_state.get("active_target_file")),
+            key="role_select_target",
+        )
+        st.caption(
+            f"XSLT: `{_role_display_name(st.session_state.active_xslt_file) or 'none'}` · "
+            f"Src: `{_role_display_name(st.session_state.active_source_file) or 'none'}` · "
+            f"Tgt: `{_role_display_name(st.session_state.active_target_file) or 'none'}`"
+        )
 
-    st.session_state.active_xslt_file = None if _selected_xslt == "(none)" else _selected_xslt
+    st.session_state.active_xslt_file   = None if _selected_xslt   == "(none)" else _selected_xslt
     st.session_state.active_source_file = None if _selected_source == "(none)" else _selected_source
     st.session_state.active_target_file = None if _selected_target == "(none)" else _selected_target
     _sync_role_paths_to_session()
 
-    st.markdown("**Role Debug**")
-    st.caption(f"XSLT: `{_role_display_name(st.session_state.active_xslt_file) or '(none)'}`")
-    st.caption(f"Source: `{_role_display_name(st.session_state.active_source_file) or '(none)'}`")
-    st.caption(f"Target: `{_role_display_name(st.session_state.active_target_file) or '(none)'}`")
-    st.divider()
-
-    # ── RAG index ─────────────────────────────────────────────────────────────
-    st.markdown("**RAG Index**")
-    _RAG_EXTS   = {".xml", ".xsl", ".xslt", ".xsd", ".edi", ".txt"}
-    _file_count = sum(
-        1 for f in _data_dir.rglob("*")
-        if f.is_file() and f.suffix.lower() in _RAG_EXTS
-    )
-    _indexed = _index_dir.exists()
-
-    rag_col1, rag_col2 = st.columns(2)
-    rag_col1.metric("data/ files", _file_count)
-    rag_col2.metric("Status", "Ready" if _indexed else "None")
-
-    if not _indexed:
-        st.caption("Run `python scripts/index_data.py` after adding files to `data/`.")
-
-    if st.button("Re-index data/", use_container_width=True, disabled=(_file_count == 0)):
-        with st.spinner("Indexing…"):
-            try:
-                from modules.rag_engine import index_folder
-                from modules.rules_store import RulesStore, utc_now
-                db_path = Path(__file__).resolve().parent / "rules_store.db"
-                idx_result = index_folder(
-                    folder_path=str(_data_dir),
-                    persist_dir=str(_index_dir),
-                    force_reindex=True,
-                )
-                try:
-                    with RulesStore(db_path) as store:
-                        now = utc_now()
-                        store.log_event(
-                            actor=str(st.session_state.get("reviewer_name") or "system"),
-                            action="reindex_data",
-                            target=str(_data_dir),
-                            status="success",
-                            started_at=now,
-                            finished_at=now,
-                            duration_ms=0,
-                            why="user_clicked_reindex",
-                            error=None,
-                            metadata=idx_result,
-                        )
-                except Exception:
-                    pass
-                st.success(
-                    f"Indexed {idx_result.get('indexed', 0)}, "
-                    f"skipped {idx_result.get('skipped', 0)}"
-                )
-            except Exception as ex:
-                st.error(f"Index failed: {ex}")
-    st.divider()
-
-    # ── Session controls ───────────────────────────────────────────────────────
-    st.markdown("**Session**")
+    # ── SESSION card ──────────────────────────────────────────────────────────
+    st.markdown('<div class="sb-section-card"><p class="sb-section-title">⚙️ Session</p></div>', unsafe_allow_html=True)
     if st.button("New Session", use_container_width=True):
         from modules.usage_tracker import reset_session_stats
         reset_session_stats()
         st.session_state.session.reset()
-        st.session_state.messages       = []
-        st.session_state.active_files   = []
-        st.session_state.pending_paths  = []
-        st.session_state.active_xslt_file = None
-        st.session_state.active_source_file = None
-        st.session_state.active_target_file = None
-        st.session_state.audit_dict     = None
-        st.session_state.audit_ingested = None
-        st.session_state.last_route     = None
-        st.session_state.chat_agent     = None
+        st.session_state.messages            = []
+        st.session_state.active_files        = []
+        st.session_state.pending_paths       = []
+        st.session_state.active_xslt_file    = None
+        st.session_state.active_source_file  = None
+        st.session_state.active_target_file  = None
+        st.session_state.audit_dict          = None
+        st.session_state.audit_ingested      = None
+        st.session_state.last_route          = None
+        st.session_state.chat_agent          = None
         from modules.token_tracker import empty_session_stats
-        st.session_state.token_stats    = empty_session_stats()
+        st.session_state.token_stats = empty_session_stats()
         st.rerun()
-    st.divider()
 
-    # ── Reviewer identity (for audit log) ─────────────────────────────────────
-    st.subheader("✅ Review")
-    st.text_input(
-        "Your name (for approvals/audit)",
-        key="reviewer_name",
-        placeholder="e.g. Annabelle",
-    )
-
-    # ── Token Usage Stats ──────────────────────────────────────────────────────
-    _ts = st.session_state.get("token_stats", {})
-    _total_tok = _ts.get("total_tokens", 0)
-    with st.expander(f"📊 Token Usage — {_total_tok:,} tokens", expanded=(_total_tok > 0)):
-        if _total_tok == 0:
-            st.caption("No LLM calls yet this session.")
-        else:
-            _calls = _ts.get("total_calls", 0)
-            _prompt = _ts.get("total_prompt_tokens", 0)
-            _comp   = _ts.get("total_completion_tokens", 0)
-            col1, col2 = st.columns(2)
-            col1.metric("Total Tokens", f"{_total_tok:,}")
-            col2.metric("LLM Calls", _calls)
-            col1.metric("Prompt Tokens", f"{_prompt:,}")
-            col2.metric("Output Tokens", f"{_comp:,}")
-            st.markdown("**By Engine**")
-            _engine_icons = {"explain":"🔍","simulate":"⚙️","modify":"✏️","audit":"🛡️","generate":"🏗️","intent_router":"🧭","unknown":"❓"}
-            for _eng, _estats in sorted(_ts.get("by_engine", {}).items()):
-                _icon = _engine_icons.get(_eng, "•")
-                st.markdown(f"{_icon} **{_eng.capitalize()}** — `{_estats.get('total_tokens',0):,}` tokens · {_estats.get('calls',0)} calls")
-
-    st.divider()
-
-    # ── Debug expander ─────────────────────────────────────────────────────────
-    with st.expander("Debug — last route", expanded=False):
-        if st.session_state.last_route:
-            r = st.session_state.last_route
-            st.write(f"**Primary:** `{r.get('primary', '—')}`")
-            st.write(f"**Multi-intent:** `{r.get('is_multi', False)}`")
-            st.write(f"**Active:** `{r.get('active_intents', [])}`")
-            scores = r.get("scores", {})
-            if scores:
-                st.write("**Scores:**")
-                for k, v in scores.items():
-                    st.progress(float(v), text=f"{k}: {v:.2f}")
-            session_files = st.session_state.session.ingested_files
-            st.write(f"**Session files ({len(session_files)}):**")
-            for f in session_files:
-                st.caption(f"- {f.get('metadata', {}).get('filename', '?')}")
-        else:
-            st.caption("No message sent yet.")
-
-    st.divider()
-
-    # ── Token Usage & Cost ─────────────────────────────────────────────────────
-    from modules.usage_tracker import get_session_stats, PRICING_COMPARISON
-
-    st.markdown("**Token Usage & Cost**")
-    _stats = get_session_stats()
-
-    if _stats["calls"] == 0:
-        st.caption("No API calls made yet this session.")
+    # ── COST card ─────────────────────────────────────────────────────────────
+    from modules.usage_tracker import get_session_stats as _get_stats
+    _qs = _get_stats()
+    st.markdown('<div class="sb-section-card"><p class="sb-section-title">💰 Est. Session Cost</p></div>', unsafe_allow_html=True)
+    if _qs["calls"] == 0:
+        st.caption("No API calls yet.")
     else:
-        # Last call
-        lc = _stats["last_call"]
-        st.caption("**Last call**")
-        lc_cols = st.columns(3)
-        lc_cols[0].metric("Input", f"{lc['prompt_tokens']:,}")
-        lc_cols[1].metric("Output", f"{lc['completion_tokens']:,}")
-        lc_cols[2].metric("Cost", f"${lc['cost_usd']:.5f}")
-        st.caption(f"`{lc['model']}` via {lc['provider']} · {lc['latency_ms']:.0f} ms · called by `{lc['caller']}`")
+        _qs_c1, _qs_c2 = st.columns(2)
+        _qs_c1.metric("Tokens",    f"{_qs['total_tokens']:,}")
+        _qs_c2.metric("Est. cost", f"${_qs['estimated_cost_usd']:.4f}")
+        st.caption("→ **📈 Analytics** tab for full breakdown")
 
-        # Session totals
-        st.caption("**Session total**")
-        st_cols = st.columns(3)
-        st_cols[0].metric("Calls", _stats["calls"])
-        st_cols[1].metric("Tokens", f"{_stats['total_tokens']:,}")
-        st_cols[2].metric("Est. cost", f"${_stats['estimated_cost_usd']:.4f}")
-
-    # Pricing comparison table
-    with st.expander("Model pricing comparison", expanded=False):
-        st.caption("Prices in USD per 1 million tokens")
-        _hdr = "| Model | Provider | Input/1M | Output/1M |"
-        _sep = "|---|---|---|---|"
-        _rows = "\n".join(
-            f"| `{r['model']}` | {r['provider']} | ${r['input_per_1M']:.2f} | ${r['output_per_1M']:.2f} |"
-            for r in PRICING_COMPARISON
-        )
-        st.markdown(f"{_hdr}\n{_sep}\n{_rows}")
-
-    st.divider()
     st.caption("PartnerLinQ · Industry Practicum · 2026")
 
 
@@ -726,7 +809,7 @@ with st.sidebar:
 # MAIN AREA — TABBED LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_chat, tab_review, tab_history = st.tabs(["💬 Chat", "🧾 Review & Diff", "📋 Revision History"])
+tab_chat, tab_review, tab_history, tab_analytics = st.tabs(["💬 Chat", "🧾 Review & Diff", "📋 Revision History", "📈 Analytics"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — CHAT
@@ -875,6 +958,203 @@ with tab_chat:
                     use_container_width=False,
                     key=f"dl_{_msg_idx}",
                 )
+
+    # ── Attachment popover (compact file upload near the chat input) ─────────
+    # Capture the uploader return value OUTSIDE the popover context so that
+    # st.rerun() is never called from inside the popover block.  Calling rerun
+    # from inside a with-st.popover() raises StopException before the context
+    # manager exits cleanly, which silently discards any session_state changes
+    # made inside the block.
+    _inline_uploads = None
+    with st.popover("📎 Attach files", use_container_width=False):
+        st.caption("Upload mapping files to use in the chat.")
+        _inline_uploads = st.file_uploader(
+            "Attach files",
+            type=["xml", "xsl", "xslt", "xsd", "edi", "txt"],
+            accept_multiple_files=True,
+            key="inline_uploader",
+            label_visibility="collapsed",
+        )
+
+    # Process new inline uploads AFTER the popover context has closed.
+    if _inline_uploads:
+        _known = _active_file_names()
+        _new_inline = [f for f in _inline_uploads if f.name not in _known]
+        if _new_inline:
+            for _uf in _new_inline:
+                _saved = _save_upload(_uf)
+                st.session_state.active_files.append({"name": _uf.name, "path": _saved})
+                try:
+                    _ing = ingest_file(file_path=_saved)
+                    st.session_state.session.add_file(_ing)
+                except Exception:
+                    st.session_state.pending_paths.append(_saved)
+            st.rerun()
+
+    # ── Chat input ────────────────────────────────────────────────────────────
+    user_input = st.chat_input("Ask anything about your mapping files…")
+
+    if user_input:
+        _active_provider = st.session_state.get("llm_provider", "openai")
+        from modules.llm_client import PROVIDERS as _PROVIDERS
+        _env_key_name    = _PROVIDERS.get(_active_provider, {}).get("env_key", "OPENAI_API_KEY")
+        _active_api_key  = os.getenv(_env_key_name) or os.getenv("OPENAI_API_KEY") or ""
+
+        _streaming_providers = {"openai", "groq"}
+        _non_explain_actions = {"modify", "simulate", "audit", "generate", "compare"}
+        _agent_for_stream    = st.session_state.get("chat_agent")
+
+        def _is_non_explain(msg: str) -> bool:
+            from modules.dispatcher import _classify_action
+            return _classify_action(msg) in _non_explain_actions
+
+        if (
+            _agent_for_stream is not None
+            and _active_provider in _streaming_providers
+            and not st.session_state.pending_paths
+            and not _is_non_explain(user_input)
+        ):
+            with st.chat_message("user"):
+                st.markdown(user_input)
+
+            with st.chat_message("assistant"):
+                try:
+                    _stream_gen    = _agent_for_stream.chat(user_input, stream=True)
+                    _streamed_text = st.write_stream(_stream_gen)
+                except Exception as _se:
+                    _streamed_text = f"⚠️ Streaming error: {_se}"
+                    st.markdown(_streamed_text)
+
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            st.session_state.messages.append({
+                "role":     "assistant",
+                "content":  _streamed_text,
+                "intent":   "explain",
+                "file_used": "",
+            })
+            st.rerun()
+
+        st.session_state.messages.append({"role": "user", "content": user_input})
+
+        with st.spinner("Thinking…"):
+            try:
+                result = dispatch(
+                    user_message=user_input,
+                    file_paths=st.session_state.pending_paths,
+                    session=st.session_state.session,
+                    provider=_active_provider,
+                    api_key=_active_api_key or None,
+                )
+                dispatch_error = None
+            except Exception as ex:
+                result        = None
+                dispatch_error = str(ex)
+
+        st.session_state.pending_paths = []
+
+        download_xslt     = None   # type: Optional[str]
+        download_filename = None   # type: Optional[str]
+        download_label    = None   # type: Optional[str]
+
+        if result is None:
+            response_text = f"⚠️ Error: {dispatch_error}"
+            intent        = "error"
+            file_used     = ""
+        else:
+            response_text = result["primary_response"] or "_No response generated._"
+            intent        = result["route"].get("primary", "unknown")
+            file_used     = result.get("primary_file_name", "")
+            st.session_state.last_route = result["route"]
+
+            _turn_usage = result.get("token_usage")
+            if _turn_usage:
+                from modules.token_tracker import merge_into_session
+                merge_into_session(st.session_state.token_stats, _turn_usage)
+
+            if result.get("audit_dict") is not None:
+                st.session_state.audit_dict     = result["audit_dict"]
+                st.session_state.audit_ingested = result.get("ingested")
+
+            _result_agent = result.get("agent")
+            if _result_agent is not None and intent == "explain":
+                st.session_state.chat_agent = _result_agent
+            elif intent not in ("explain", "unknown"):
+                st.session_state.chat_agent = None
+
+            patched      = result.get("patched_xslt")
+            generated    = result.get("generated_xslt")
+            simulate_out = result.get("simulate_output")
+            _sid         = st.session_state.session.session_id
+
+            if patched and intent == "modify":
+                _raw_orig = result.get("primary_file_name", "mapping.xml")
+                if _raw_orig.startswith(_sid + "_"):
+                    _orig_display = _raw_orig[len(_sid) + 1:]
+                else:
+                    _orig_display = _raw_orig
+                _stem             = _orig_display.rsplit(".", 1)[0] if "." in _orig_display else _orig_display
+                _new_display      = f"{_stem}_patched.xml"
+                download_filename = f"{_sid}_{_new_display}"
+                download_label    = f"Download {_new_display}"
+                download_xslt     = patched
+                try:
+                    _ingest_and_update_session(
+                        patched,
+                        download_filename,
+                        original_name=_raw_orig,
+                        chip_name=_orig_display,
+                    )
+                except Exception:
+                    pass
+
+                _orig_ing = result.get("ingested")
+                if _orig_ing:
+                    _before_raw = (_orig_ing.get("parsed_content") or {}).get("raw_xml", "")
+                    st.session_state.review_before_xslt = _before_raw or None
+                st.session_state.review_after_xslt = patched
+                st.session_state.review_rule_key   = download_filename
+
+            elif simulate_out and intent == "simulate":
+                download_filename = f"{_sid}_transform_output.xml"
+                download_label    = "Download transform output (XML)"
+                download_xslt     = simulate_out
+
+            elif generated and intent == "generate":
+                download_filename = f"{_sid}_generated.xml"
+                download_label    = "Download generated XSLT"
+                download_xslt     = generated
+                response_text = _re.sub(
+                    r"```xml[\s\S]*?```",
+                    "_Full XSLT is available via the download button below._",
+                    response_text,
+                    count=1,
+                )
+                try:
+                    _ingest_and_update_session(generated, download_filename, original_name=None)
+                except Exception:
+                    pass
+
+        _msg: dict = {
+            "role":              "assistant",
+            "content":           response_text,
+            "intent":            intent,
+            "file_used":         file_used,
+            "download_xslt":     download_xslt,
+            "download_filename": download_filename,
+            "download_label":    download_label,
+        }
+        if result is not None and intent == "simulate":
+            _msg["status"]                  = result.get("status", "")
+            _msg["target_match_status"]     = result.get("target_match_status", "")
+            _msg["target_match_summary"]    = result.get("target_match_summary", "")
+            _msg["missing_target_segments"] = result.get("missing_target_segments", [])
+            _msg["extra_output_segments"]   = result.get("extra_output_segments", [])
+            _msg["mismatched_fields"]       = result.get("mismatched_fields", [])
+            _msg["autofix_suggestions"]     = result.get("autofix_suggestions", [])
+            _msg["simulate_audit_findings"] = result.get("simulate_audit_findings", [])
+        st.session_state.messages.append(_msg)
+        st.rerun()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — REVIEW & DIFF
@@ -1226,219 +1506,122 @@ with tab_history:
                     st.code("\n".join(_preview_lines), language="xml")
 
 
-# ── Attachment popover (compact file upload near the chat input) ───────────────
-# Capture the uploader return value OUTSIDE the popover context so that
-# st.rerun() is never called from inside the popover block.  Calling rerun
-# from inside a with-st.popover() raises StopException before the context
-# manager exits cleanly, which silently discards any session_state changes
-# made inside the block.
-_inline_uploads = None
-with st.popover("📎 Attach files", use_container_width=False):
-    st.caption("Upload mapping files to use in the chat.")
-    _inline_uploads = st.file_uploader(
-        "Attach files",
-        type=["xml", "xsl", "xslt", "xsd", "edi", "txt"],
-        accept_multiple_files=True,
-        key="inline_uploader",
-        label_visibility="collapsed",
-    )
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — ANALYTICS  (dynamic token usage × cost table)
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Process new inline uploads AFTER the popover context has closed.
-# We ingest immediately here so the file is available to the agent
-# even before the user sends their first message.  pending_paths is
-# used as a fallback only when ingest itself fails.
-if _inline_uploads:
-    _known = _active_file_names()
-    _new_inline = [f for f in _inline_uploads if f.name not in _known]
-    if _new_inline:
-        for _uf in _new_inline:
-            _saved = _save_upload(_uf)
-            st.session_state.active_files.append({"name": _uf.name, "path": _saved})
-            try:
-                _ing = ingest_file(file_path=_saved)
-                st.session_state.session.add_file(_ing)
-            except Exception:
-                # Ingest failed — queue for dispatch as a safe fallback
-                st.session_state.pending_paths.append(_saved)
-        st.rerun()
+with tab_analytics:
+    st.markdown("### 📈 Session Analytics")
+    st.caption("Live token usage and estimated cost for this session, broken down by engine and model.")
 
-# ── Chat input ─────────────────────────────────────────────────────────────────
-user_input = st.chat_input("Ask anything about your mapping files…")
+    from modules.usage_tracker import get_session_stats, PRICING
 
-if user_input:
-    _active_provider = st.session_state.get("llm_provider", "openai")
-    from modules.llm_client import PROVIDERS as _PROVIDERS
-    _env_key_name    = _PROVIDERS.get(_active_provider, {}).get("env_key", "OPENAI_API_KEY")
-    _active_api_key  = os.getenv(_env_key_name) or os.getenv("OPENAI_API_KEY") or ""
+    _stats = get_session_stats()
+    _ts    = st.session_state.get("token_stats", {})
 
-    # ── Streaming fast-path for explain follow-ups ─────────────────────────────
-    # When a FileAgent is already loaded from a previous explain turn AND the
-    # current message is not a hard action (modify/simulate/audit/generate),
-    # stream the response directly — tokens appear live, no dispatcher overhead.
-    _streaming_providers = {"openai", "groq"}
-    _non_explain_actions = {"modify", "simulate", "audit", "generate", "compare"}
-    _agent_for_stream    = st.session_state.get("chat_agent")
+    # ── Summary KPI row ──────────────────────────────────────────────────────
+    _kpi1, _kpi2, _kpi3, _kpi4 = st.columns(4)
+    _kpi1.metric("API Calls",       _stats.get("calls", 0))
+    _kpi2.metric("Total Tokens",    f"{_stats.get('total_tokens', 0):,}")
+    _kpi3.metric("Prompt Tokens",   f"{_stats.get('prompt_tokens', 0):,}")
+    _kpi4.metric("Output Tokens",   f"{_stats.get('completion_tokens', 0):,}")
 
-    def _is_non_explain(msg: str) -> bool:
-        from modules.dispatcher import _classify_action
-        return _classify_action(msg) in _non_explain_actions
-
-    if (
-        _agent_for_stream is not None
-        and _active_provider in _streaming_providers
-        and not st.session_state.pending_paths
-        and not _is_non_explain(user_input)
-    ):
-        with st.chat_message("user"):
-            st.markdown(user_input)
-
-        with st.chat_message("assistant"):
-            try:
-                _stream_gen    = _agent_for_stream.chat(user_input, stream=True)
-                _streamed_text = st.write_stream(_stream_gen)
-            except Exception as _se:
-                _streamed_text = f"⚠️ Streaming error: {_se}"
-                st.markdown(_streamed_text)
-
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        st.session_state.messages.append({
-            "role":     "assistant",
-            "content":  _streamed_text,
-            "intent":   "explain",
-            "file_used": "",
-        })
-        st.rerun()
-
-    # ── Standard (non-streaming) dispatch path ─────────────────────────────────
-    st.session_state.messages.append({"role": "user", "content": user_input})
-
-    with st.spinner("Thinking…"):
-        try:
-            result = dispatch(
-                user_message=user_input,
-                file_paths=st.session_state.pending_paths,
-                session=st.session_state.session,
-                provider=_active_provider,
-                api_key=_active_api_key or None,
-            )
-            dispatch_error = None
-        except Exception as ex:
-            result        = None
-            dispatch_error = str(ex)
-
-    # Clear pending paths — session now owns the ingested dicts
-    st.session_state.pending_paths = []
-
-    download_xslt     = None   # type: Optional[str]
-    download_filename = None   # type: Optional[str]
-    download_label    = None   # type: Optional[str]
-
-    if result is None:
-        response_text = f"⚠️ Error: {dispatch_error}"
-        intent        = "error"
-        file_used     = ""
+    _total_cost = _stats.get("estimated_cost_usd", 0.0)
+    if _stats.get("calls", 0) == 0:
+        st.info("No API calls made yet this session. Start a chat to see live usage data.")
     else:
-        response_text = result["primary_response"] or "_No response generated._"
-        intent        = result["route"].get("primary", "unknown")
-        file_used     = result.get("primary_file_name", "")
-        st.session_state.last_route = result["route"]
+        st.metric("Estimated session cost", f"${_total_cost:.5f}", help="Based on public pricing at time of release")
 
-        # ── Merge token usage into session-level stats ────────────────────────
-        _turn_usage = result.get("token_usage")
-        if _turn_usage:
-            from modules.token_tracker import merge_into_session
-            merge_into_session(st.session_state.token_stats, _turn_usage)
+        # ── Per-engine breakdown table ─────────────────────────────────────
+        st.markdown("#### Breakdown by Engine")
+        _by_engine = _ts.get("by_engine", {})
 
-        if result.get("audit_dict") is not None:
-            st.session_state.audit_dict     = result["audit_dict"]
-            st.session_state.audit_ingested = result.get("ingested")
+        if _by_engine:
+            import pandas as _pd
 
-        # ── Cache FileAgent for streaming follow-up turns ─────────────────────
-        _result_agent = result.get("agent")
-        if _result_agent is not None and intent == "explain":
-            st.session_state.chat_agent = _result_agent
-        elif intent not in ("explain", "unknown"):
-            # Non-explain action — reset so next explain starts fresh
-            st.session_state.chat_agent = None
+            _engine_icons = {
+                "explain":       "🔍",
+                "simulate":      "⚙️",
+                "modify":        "✏️",
+                "audit":         "🛡️",
+                "generate":      "🏗️",
+                "intent_router": "🧭",
+                "rag":           "📚",
+                "unknown":       "❓",
+            }
 
-        # ── Auto-ingest patched/generated XSLT back into session ─────────────
+            _rows = []
+            for _eng, _estats in sorted(_by_engine.items()):
+                _model       = _estats.get("model", "—")
+                _p_in        = _estats.get("prompt_tokens", 0)
+                _p_out       = _estats.get("completion_tokens", 0)
+                _p_tot       = _estats.get("total_tokens", 0)
+                _calls       = _estats.get("calls", 0)
+                _price_in, _price_out = PRICING.get(_model, (0.0, 0.0))
+                _cost_in     = _p_in  * _price_in  / 1_000_000
+                _cost_out    = _p_out * _price_out / 1_000_000
+                _eng_cost    = round(_cost_in + _cost_out, 6)
+                _icon        = _engine_icons.get(_eng, "•")
+                _rows.append({
+                    "Engine":         f"{_icon} {_eng.capitalize()}",
+                    "Model":          _model,
+                    "Calls":          _calls,
+                    "Input Tokens":   _p_in,
+                    "Output Tokens":  _p_out,
+                    "Total Tokens":   _p_tot,
+                    "Input $/1M":     f"${_price_in:.2f}",
+                    "Output $/1M":    f"${_price_out:.2f}",
+                    "Est. Cost (USD)": f"${_eng_cost:.5f}",
+                })
 
-        patched          = result.get("patched_xslt")
-        generated        = result.get("generated_xslt")
-        simulate_out     = result.get("simulate_output")
-        _sid             = st.session_state.session.session_id
+            _df = _pd.DataFrame(_rows)
+            st.dataframe(_df, use_container_width=True, hide_index=True)
 
-        if patched and intent == "modify":
-            # raw_orig is the metadata filename (includes session-id prefix)
-            _raw_orig = result.get("primary_file_name", "mapping.xml")
-            # Strip session-id prefix to get a clean display name
-            if _raw_orig.startswith(_sid + "_"):
-                _orig_display = _raw_orig[len(_sid) + 1:]
-            else:
-                _orig_display = _raw_orig
-            _stem             = _orig_display.rsplit(".", 1)[0] if "." in _orig_display else _orig_display
-            _new_display      = f"{_stem}_patched.xml"
-            download_filename = f"{_sid}_{_new_display}"
-            download_label    = f"Download {_new_display}"
-            download_xslt     = patched
-            try:
-                _ingest_and_update_session(
-                    patched,
-                    download_filename,
-                    original_name=_raw_orig,    # metadata filename for session lookup
-                    chip_name=_orig_display,    # display name for chip update
-                )
-            except Exception:
-                pass   # ingest failure is non-fatal; user can still download
-
-            # ── Populate Review tab ───────────────────────────────────────────
-            # before = raw_xml from the original ingested dict (pre-patch)
-            _orig_ing = result.get("ingested")
-            if _orig_ing:
-                _before_raw = (_orig_ing.get("parsed_content") or {}).get("raw_xml", "")
-                st.session_state.review_before_xslt = _before_raw or None
-            st.session_state.review_after_xslt = patched
-            st.session_state.review_rule_key   = download_filename
-
-        elif simulate_out and intent == "simulate":
-            download_filename = f"{_sid}_transform_output.xml"
-            download_label    = "Download transform output (XML)"
-            download_xslt     = simulate_out
-
-        elif generated and intent == "generate":
-            download_filename = f"{_sid}_generated.xml"
-            download_label    = "Download generated XSLT"
-            download_xslt     = generated
-            # Strip the full ```xml ... ``` block from the chat message — it goes
-            # into the download, not the conversation.  Keep the prose description.
-            response_text = _re.sub(
-                r"```xml[\s\S]*?```",
-                "_Full XSLT is available via the download button below._",
-                response_text,
-                count=1,
+            # ── Totals row ─────────────────────────────────────────────────
+            _tot_in  = sum(r["Input Tokens"]  for r in _rows)
+            _tot_out = sum(r["Output Tokens"] for r in _rows)
+            _tot_tok = sum(r["Total Tokens"]  for r in _rows)
+            st.markdown(
+                f"**Totals — Input: `{_tot_in:,}` · Output: `{_tot_out:,}` · "
+                f"Total: `{_tot_tok:,}` · Est. cost: `${_total_cost:.5f}`**"
             )
-            try:
-                _ingest_and_update_session(generated, download_filename, original_name=None)
-            except Exception:
-                pass
+        else:
+            st.caption("Engine breakdown not yet available.")
 
-    _msg: dict = {
-        "role":              "assistant",
-        "content":           response_text,
-        "intent":            intent,
-        "file_used":         file_used,
-        "download_xslt":     download_xslt,
-        "download_filename": download_filename,
-        "download_label":    download_label,
-    }
-    if result is not None and intent == "simulate":
-        _msg["status"]                  = result.get("status", "")
-        _msg["target_match_status"]     = result.get("target_match_status", "")
-        _msg["target_match_summary"]    = result.get("target_match_summary", "")
-        _msg["missing_target_segments"] = result.get("missing_target_segments", [])
-        _msg["extra_output_segments"]   = result.get("extra_output_segments", [])
-        _msg["mismatched_fields"]       = result.get("mismatched_fields", [])
-        _msg["autofix_suggestions"]     = result.get("autofix_suggestions", [])
-        _msg["simulate_audit_findings"] = result.get("simulate_audit_findings", [])
-    st.session_state.messages.append(_msg)
-    st.rerun()
+        # ── Last call detail ───────────────────────────────────────────────
+        _lc = _stats.get("last_call")
+        if _lc:
+            st.divider()
+            st.markdown("#### Last API Call")
+            _lc1, _lc2, _lc3 = st.columns(3)
+            _lc1.metric("Input",  f"{_lc['prompt_tokens']:,}")
+            _lc2.metric("Output", f"{_lc['completion_tokens']:,}")
+            _lc3.metric("Cost",   f"${_lc['cost_usd']:.5f}")
+            st.caption(
+                f"`{_lc['model']}` via **{_lc['provider']}** · "
+                f"{_lc['latency_ms']:.0f} ms · caller: `{_lc['caller']}`"
+            )
+
+    # ── Pricing reference table ────────────────────────────────────────────
+    st.divider()
+    st.markdown("#### Model Pricing Reference")
+    st.caption("Rates used to compute cost estimates (USD per 1 million tokens)")
+
+    from modules.usage_tracker import PRICING_COMPARISON as _PCOMP
+    import pandas as _pd2
+
+    _ref_rows = [
+        {
+            "Model":          r["model"],
+            "Provider":       r["provider"],
+            "Input $/1M":     f"${r['input_per_1M']:.2f}",
+            "Output $/1M":    f"${r['output_per_1M']:.2f}",
+            "Session Input $":  f"${_stats.get('prompt_tokens', 0) * r['input_per_1M'] / 1_000_000:.5f}",
+            "Session Output $": f"${_stats.get('completion_tokens', 0) * r['output_per_1M'] / 1_000_000:.5f}",
+        }
+        for r in _PCOMP
+    ]
+    st.dataframe(_pd2.DataFrame(_ref_rows), use_container_width=True, hide_index=True)
+    st.caption("'Session Input $' / 'Session Output $' shows what this session would cost if all tokens had used that model.")
+
+
