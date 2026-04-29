@@ -352,7 +352,7 @@ if not st.session_state.logged_in:
     with st.form("login_form"):
         name     = st.text_input("Name", placeholder="Your name")
         password = st.text_input("Access key", type="password", placeholder="••••••••")
-        submitted = st.form_submit_button("Sign In →", use_container_width=True, type="primary")
+        submitted = st.form_submit_button("Sign In →", width="stretch", type="primary")
 
         if submitted:
             if password != DEMO_PASSWORD:
@@ -645,7 +645,7 @@ with st.sidebar:
         with st.container():
             st.markdown('<div class="sb-section-card"><p class="sb-section-title">Signed in</p></div>', unsafe_allow_html=True)
             st.caption(f"👤 **{user['name']}** · {user['role']}")
-            if st.button("Sign out", use_container_width=True):
+            if st.button("Sign out", width="stretch"):
                 from modules.usage_tracker import reset_session_stats
                 reset_session_stats()
                 for key in ["logged_in", "current_user", "session", "messages",
@@ -772,7 +772,7 @@ with st.sidebar:
 
     # ── SESSION card ──────────────────────────────────────────────────────────
     st.markdown('<div class="sb-section-card"><p class="sb-section-title">⚙️ Session</p></div>', unsafe_allow_html=True)
-    if st.button("New Session", use_container_width=True):
+    if st.button("New Session", width="stretch"):
         from modules.usage_tracker import reset_session_stats
         reset_session_stats()
         st.session_state.session.reset()
@@ -955,7 +955,7 @@ with tab_chat:
                     file_name=dl_fname,
                     mime="application/xml",
                     type="primary",
-                    use_container_width=False,
+                    width="content",
                     key=f"dl_{_msg_idx}",
                 )
 
@@ -966,7 +966,7 @@ with tab_chat:
     # manager exits cleanly, which silently discards any session_state changes
     # made inside the block.
     _inline_uploads = None
-    with st.popover("📎 Attach files", use_container_width=False):
+    with st.popover("📎 Attach files", width="content"):
         st.caption("Upload mapping files to use in the chat.")
         _inline_uploads = st.file_uploader(
             "Attach files",
@@ -987,6 +987,18 @@ with tab_chat:
                 try:
                     _ing = ingest_file(file_path=_saved)
                     st.session_state.session.add_file(_ing)
+                    # Build XSLT index and set file role at upload time so that
+                    # subsequent explain/modify turns can use the tool-calling path.
+                    _ing_ft = (_ing.get("metadata") or {}).get("file_type", "")
+                    _ing_sp = (_ing.get("metadata") or {}).get("source_path", "")
+                    if _ing_ft == "XSLT" and _ing_sp:
+                        try:
+                            from modules.xslt_index import build_xslt_index as _bxi_inline
+                            st.session_state.session.set_xslt_index(_ing_sp, _bxi_inline(_ing))
+                        except Exception:
+                            pass
+                        if st.session_state.session.get_role_file("xslt") is None:
+                            st.session_state.session.set_role_file("xslt", _ing_sp)
                 except Exception:
                     st.session_state.pending_paths.append(_saved)
             st.rerun()
@@ -1211,7 +1223,7 @@ with tab_review:
                 data=after_xslt,
                 file_name=f"{rule_key}.xslt",
                 mime="application/xml",
-                use_container_width=True,
+                width="stretch",
             )
         with action_cols[2]:
             show_diff = st.checkbox("Show diff", value=True)
@@ -1249,7 +1261,7 @@ with tab_review:
         reason   = (st.session_state.get("review_reason") or "").strip()
 
         with btn_l:
-            if st.button("✅ Approve", type="primary", use_container_width=True):
+            if st.button("✅ Approve", type="primary", width="stretch"):
                 if not reason:
                     st.error("Reason is required to approve.")
                 else:
@@ -1262,7 +1274,7 @@ with tab_review:
                     st.rerun()
 
         with btn_r:
-            if st.button("❌ Reject", use_container_width=True):
+            if st.button("❌ Reject", width="stretch"):
                 if not reason:
                     st.error("Reason is required to reject.")
                 else:
@@ -1287,7 +1299,7 @@ with tab_review:
                 choices  = [f"v{v.version} — {v.approved_at.date()} by {v.approved_by}" for v in versions]
                 selected = st.selectbox("Rollback to approved version", choices, index=0)
                 sel_ver  = versions[choices.index(selected)].version
-                if st.button("⏪ Rollback", use_container_width=True):
+                if st.button("⏪ Rollback", width="stretch"):
                     if not reason:
                         st.error("Reason is required to rollback.")
                     else:
@@ -1303,7 +1315,7 @@ with tab_review:
                 st.caption("No approved versions stored yet (approve one to enable rollback).")
 
         with btn_test:
-            if st.button("🧪 Test latest XSLT", use_container_width=True):
+            if st.button("🧪 Test latest XSLT", width="stretch"):
                 with st.spinner("Testing latest revised XSLT…"):
                     try:
                         test_result, test_output = _test_latest_xslt()
@@ -1343,7 +1355,7 @@ with tab_review:
                     data=st.session_state.latest_test_output.encode("utf-8"),
                     file_name=f"{st.session_state.session.session_id}_test_output.xml",
                     mime="application/xml",
-                    use_container_width=False,
+                    width="content",
                     key="dl_test_output",
                 )
             else:
@@ -1395,7 +1407,7 @@ with tab_review:
 
                 submitted = st.form_submit_button(
                     "✅ Submit Answers for Verification",
-                    use_container_width=True,
+                    width="stretch",
                     type="primary",
                 )
 
@@ -1477,7 +1489,7 @@ with tab_history:
                         file_name=f"revision_{_rev_num}_{_ts.replace(':', '-')}.xml",
                         mime="application/xml",
                         key=f"dl_rev_{_rev_num}",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 with col_apply:
                     if st.button(
@@ -1575,7 +1587,7 @@ with tab_analytics:
                 })
 
             _df = _pd.DataFrame(_rows)
-            st.dataframe(_df, use_container_width=True, hide_index=True)
+            st.dataframe(_df, width="stretch", hide_index=True)
 
             # ── Totals row ─────────────────────────────────────────────────
             _tot_in  = sum(r["Input Tokens"]  for r in _rows)
@@ -1621,7 +1633,7 @@ with tab_analytics:
         }
         for r in _PCOMP
     ]
-    st.dataframe(_pd2.DataFrame(_ref_rows), use_container_width=True, hide_index=True)
+    st.dataframe(_pd2.DataFrame(_ref_rows), width="stretch", hide_index=True)
     st.caption("'Session Input $' / 'Session Output $' shows what this session would cost if all tokens had used that model.")
 
 

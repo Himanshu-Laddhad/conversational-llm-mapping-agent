@@ -99,6 +99,18 @@ Signals that need_rag = false (most questions fall here):
   - Modify, generate, simulate, or audit requests on the active file
   - Any question answerable from the loaded file + conversation alone
 
+SCOPE RULE (is_in_scope):
+Set "is_in_scope": true if the message has ANY conceivable connection to:
+  - EDI, XSLT, XML, mapping files, transformations, data formats
+  - Asking about an uploaded/loaded file (even vaguely: "what is this?", "what does it do?", "use of the file")
+  - Any of the five agent capabilities: explain, modify, simulate, audit, generate
+  - General questions a user might ask while working with mapping files
+Set "is_in_scope": false ONLY if the message is clearly unrelated to mapping/EDI work
+and could not possibly be about an uploaded file:
+  - "what is the weather today", "write me a poem", "who won the game"
+  - Pure casual chat with zero mapping context
+When in doubt, set is_in_scope: true. Be permissive, not restrictive.
+
 Return ONLY valid JSON, no markdown fences, no extra text:
 {
   "scores": {
@@ -115,7 +127,8 @@ Return ONLY valid JSON, no markdown fences, no extra text:
     "simulate": "<one phrase why this score>",
     "audit":    "<one phrase why this score>"
   },
-  "needs_rag": <true|false>
+  "needs_rag":   <true|false>,
+  "is_in_scope": <true|false>
 }"""
 
 # ── Intent metadata ───────────────────────────────────────────────────────────
@@ -205,7 +218,7 @@ def route(
             model=resolved_model,
             provider=provider,
             temperature=0.0,
-            max_tokens=300,   # slightly larger to accommodate needs_rag field
+            max_tokens=350,   # accommodates needs_rag + is_in_scope fields
             engine="intent_router",
         )
 
@@ -219,9 +232,10 @@ def route(
             raw = raw.strip()
 
         parsed = json.loads(raw)
-        scores    = parsed.get("scores", {})
-        reasoning = parsed.get("reasoning", {})
-        needs_rag = bool(parsed.get("needs_rag", False))
+        scores      = parsed.get("scores", {})
+        reasoning   = parsed.get("reasoning", {})
+        needs_rag   = bool(parsed.get("needs_rag", False))
+        is_in_scope = bool(parsed.get("is_in_scope", True))  # default permissive
 
         # Clamp all scores to [0.0, 1.0] and fill missing intents
         for intent in ALL_INTENTS:
@@ -247,6 +261,7 @@ def route(
             "is_multi":       len(active) > 1,
             "threshold_used": threshold,
             "needs_rag":      needs_rag,
+            "is_in_scope":    is_in_scope,
         }
 
     except json.JSONDecodeError as e:
@@ -256,7 +271,7 @@ def route(
 
 
 def _fallback(error_msg: str, threshold: float) -> dict:
-    """Return a safe fallback result defaulting to explain, needs_rag=False."""
+    """Return a safe fallback result defaulting to explain, needs_rag=False, is_in_scope=True."""
     scores = {i: 0.0 for i in ALL_INTENTS}
     scores["explain"] = 0.5
     return {
@@ -267,6 +282,7 @@ def _fallback(error_msg: str, threshold: float) -> dict:
         "is_multi":       False,
         "threshold_used": threshold,
         "needs_rag":      False,
+        "is_in_scope":    True,   # safe default — never block on fallback
         "error":          error_msg,
     }
 

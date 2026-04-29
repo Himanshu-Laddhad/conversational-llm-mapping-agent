@@ -89,10 +89,8 @@ for _candidate in [_here / ".env", _here.parent / ".env"]:
 # Placeholder responses for engines that are not yet built.
 _UNBUILT: dict = {}   # all engines are now implemented
 
-# ── Out-of-scope guardrail ────────────────────────────────────────────────────
-# The agent is purpose-built for EDI / XSLT / MapForce mapping intelligence.
-# Any message that clearly contains none of these domain signals is rejected
-# with a friendly redirect — without spending LLM tokens on routing.
+# ── Out-of-scope response (used when LLM classifies is_in_scope=False) ────────
+# Scope detection is now handled by the intent router LLM — no keyword lists.
 
 _OUT_OF_SCOPE_RESPONSE = (
     "I'm the **PartnerLinQ Mapping Intelligence Agent** — purpose-built for "
@@ -104,33 +102,6 @@ _OUT_OF_SCOPE_RESPONSE = (
     "- **Audit** — check a mapping for misconfigurations and production-readiness issues\n"
     "- **Generate** — create a new XSLT mapping from requirements\n\n"
     "Please ask a question about your EDI or XSLT mapping files."
-)
-
-# Substring keywords — matched anywhere in the lowercased message.
-_IN_SCOPE_SUBSTRINGS: tuple[str, ...] = (
-    "xslt", "xsl:", "stylesheet", "transformation", "transform",
-    "edi", "x12", "edifact", "flatfile", "flat-file", "flat file",
-    "mapping", "mapforce", "altova", "trading partner",
-    "xml", "d365", "dynamics",
-    "810", "850", "856", "855", "997", "940", "945",
-    "simulate", "simulation", "audit", "segment", "value-of",
-    "apply-template", "partnerlinq", "source file", "target file",
-    "invoice", "purchase order", "ship notice",
-)
-
-# Whole-word keywords — only match when surrounded by word boundaries
-# (avoids "list" matching "st", "sort" matching "or", etc.)
-_IN_SCOPE_WORDS: tuple[str, ...] = (
-    "isa", "gs", "ge", "iea", "beg", "big", "dtm",
-    "n1", "n3", "n4", "it1", "tds", "ctt", "bsn",
-    "xsd", "erp", "sap", "edi", "xml", "xsl",
-    "explain", "modify", "generate",
-    "template", "segment", "mapping", "loop", "field",
-)
-
-_WORD_PATTERN: re.Pattern = re.compile(
-    r"\b(" + "|".join(re.escape(w) for w in _IN_SCOPE_WORDS) + r")\b",
-    re.IGNORECASE,
 )
 
 _MODIFY_PATTERNS: tuple[str, ...] = (
@@ -154,23 +125,6 @@ _MODIFY_PATTERNS: tuple[str, ...] = (
     r"modify",
     r"set.*to",
 )
-
-
-def _is_in_scope(user_message: str) -> bool:
-    """
-    Return True if the message contains at least one EDI/XSLT domain signal.
-    Uses substring matching for long/unambiguous terms and whole-word matching
-    for short EDI keywords (ISA, GS, ST…) to avoid false positives.
-    No LLM tokens spent.
-    """
-    lower = user_message.lower()
-    # Fast substring check for unambiguous long keywords
-    if any(kw in lower for kw in _IN_SCOPE_SUBSTRINGS):
-        return True
-    # Whole-word check for short EDI codes that could appear inside other words
-    if _WORD_PATTERN.search(user_message):
-        return True
-    return False
 
 
 def _classify_action(user_message: str) -> str:
@@ -474,6 +428,19 @@ def dispatch(
     if ingested is None:
         ingested = xslt_ingested
 
+    # If resolved_xslt_path is still None but we now have an ingested XSLT file,
+    # back-fill the role so subsequent turns can look up the index correctly.
+    if (
+        resolved_xslt_path is None
+        and xslt_ingested is not None
+        and (xslt_ingested.get("metadata") or {}).get("file_type") == "XSLT"
+        and session is not None
+    ):
+        _sp_backfill = (xslt_ingested.get("metadata") or {}).get("source_path", "")
+        if _sp_backfill:
+            resolved_xslt_path = _sp_backfill
+            session.set_role_file("xslt", _sp_backfill)
+
     # ── 2. Build context prefix from session history ──────────────────────────
     _ctx_prefix = ""
     if session is not None and session.history:
@@ -491,33 +458,14 @@ def dispatch(
     _index_dir = Path(__file__).resolve().parent.parent / ".rag_index"
     _rag_deferred = _index_dir.exists()   # will query after classification if needed
 
-    # ── 4. Out-of-scope guardrail ─────────────────────────────────────────────
-    # Reject questions clearly outside the EDI/XSLT domain before routing.
-    # Skip the check if a file was just uploaded (the upload itself is in-scope).
     _has_new_files = bool(_all_new_paths) or (ingested is not None and not session)
-    if forced_action == "out_of_scope" and not _has_new_files and not _is_in_scope(user_message):
-        _audit_log_event(
-            actor=_actor,
-            action="dispatch",
-            target="out_of_scope",
-            status="success",
-            duration_ms=int((time.time() - _t0) * 1000),
-            why="out_of_scope_guardrail",
-            metadata={"user_message_chars": len(user_message)},
-        )
-        return {
-            "route":              {"scores": {}, "active_intents": ["out_of_scope"],
-                                   "primary": "out_of_scope", "is_multi": False,
-                                   "threshold_used": 0.45},
-            "responses":          {"out_of_scope": _OUT_OF_SCOPE_RESPONSE},
-            "primary_response":   _OUT_OF_SCOPE_RESPONSE,
-            "agent":              None,
-            "ingested":           ingested,
-            "audit_dict":         None,
-            "patched_xslt":       None,
-            "session":            session,
-            "primary_file_name":  "",
-        }
+
+    # ── 4. Session-aware bypass: if a file is already loaded, always proceed ──
+    # When the user has a file in context any question is implicitly about it.
+    _has_loaded_file = (
+        (session is not None and bool(session.ingested_files))
+        or xslt_ingested is not None
+    )
 
     # ── 5. Classify user intent ───────────────────────────────────────────────
     # Direct compare mode for side-by-side XSLT comparison.
@@ -618,7 +566,8 @@ def dispatch(
             "primary": forced_action,
             "is_multi": False,
             "threshold_used": 0.45,
-            "needs_rag": False,   # pattern-classified actions never need cross-file RAG
+            "needs_rag":   False,   # pattern-classified actions never need cross-file RAG
+            "is_in_scope": True,    # pattern-classified actions are always in-scope
         }
     else:
         # Intent routing always uses Groq (llama-3.1-8b-instant) for speed and cost
@@ -639,6 +588,38 @@ def dispatch(
                 provider=provider or "openai",
                 model=os.getenv("INTENT_ROUTER_MODEL"),
             )
+
+    # ── 5a. Post-classification out-of-scope check ────────────────────────────
+    # The intent router LLM decides is_in_scope, so this runs after routing.
+    # Bypassed entirely when: a file is already loaded (#1), a new file was just
+    # uploaded, or the LLM classified the message as in-scope.
+    if (
+        not _has_loaded_file
+        and not _has_new_files
+        and not route_result.get("is_in_scope", True)
+    ):
+        _audit_log_event(
+            actor=_actor,
+            action="dispatch",
+            target="out_of_scope",
+            status="success",
+            duration_ms=int((time.time() - _t0) * 1000),
+            why="llm_out_of_scope_guardrail",
+            metadata={"user_message_chars": len(user_message)},
+        )
+        return {
+            "route":             {"scores": {}, "active_intents": ["out_of_scope"],
+                                  "primary": "out_of_scope", "is_multi": False,
+                                  "threshold_used": 0.45},
+            "responses":         {"out_of_scope": _OUT_OF_SCOPE_RESPONSE},
+            "primary_response":  _OUT_OF_SCOPE_RESPONSE,
+            "agent":             None,
+            "ingested":          ingested,
+            "audit_dict":        None,
+            "patched_xslt":      None,
+            "session":           session,
+            "primary_file_name": "",
+        }
 
     # ── 5b. RAG context — query only when the router flagged needs_rag=True ─────
     if _rag_deferred and route_result.get("needs_rag", False):
@@ -814,8 +795,6 @@ def dispatch(
                 )
             else:
                 msg = _ctx_prefix + user_message
-                # FIX: capture patched_xslt (second return value) — was wrongly
-                # discarded as `_mod_agent` in earlier versions.
                 _modify_idx = (
                     session.get_xslt_index(resolved_xslt_path)
                     if session is not None else None
