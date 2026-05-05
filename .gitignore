@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# INDUSTRY PRACTICUM - PARTNERLINQ
-# .gitignore — Files that should NOT be tracked by Git
+# .gitignore — Do not track secrets, local/runtime state, or machine-specific files
+# (safe defaults for sharing the repo with clients or publishing)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Environment & Secrets ─────────────────────────────────────────────────────
@@ -8,8 +8,13 @@
 .env
 .env.local
 .env.*.local
+.env.development
+.env.production
+.env.staging
+.env.test
 *.env
 !.env.example
+.envrc
 secrets/
 credentials/
 *.key
@@ -18,7 +23,27 @@ credentials/
 *.pfx
 config.json
 secrets.json
-PartnerLinQ_Edelman_Award.pptx
+*credentials*.json
+*secret*.json
+!**/.secrets.baseline
+google-*-credentials*.json
+firebase-adminsdk*.json
+**/serviceAccount*.json
+**/serviceAccountKey*.json
+.aws/
+.azure/
+.msazure/
+
+# Internal / one-off presentations (add negated patterns if you need a deck in-repo)
+*.pptx
+
+# ── IDE & local tool metadata (do not ship to clients) ──────────────────────
+.cursor/
+**/.cursor/
+.agent/
+
+# ── Streamlit ─────────────────────────────────────────────────────────────────
+.streamlit/secrets.toml
 
 # ── Virtual Environment ───────────────────────────────────────────────────────
 .venv/
@@ -148,6 +173,7 @@ ehthumbs_vista.db
 Desktop.ini
 $RECYCLE.BIN/
 *.lnk
+~$*
 
 # Linux
 *~
@@ -177,21 +203,28 @@ dmypy.json
 .pyre/
 .pytype/
 
-# ── Project-Specific ──────────────────────────────────────────────────────────
-# Sample/test data files (uncomment if you want to exclude them)
-# test_data/
-# samples/
-# *.x12
-# *.edi
-# *.edifact
-# *.xml
-# *.xsl
-# *.xslt
+# ── Samples, fixtures, and local inputs (do not ship to clients) ─────────────
+test/*
+!test/.gitkeep
+test_data/
+samples/
+sample_data/
+fixtures/
+example_data/
+**/sample_inputs/
 
-# Output/processed files
+# ── Generated outputs & exports ───────────────────────────────────────────────
 output/
+outputs/
+out/
 processed/
 results/
+exports/
+generated/
+scratch/
+runs/
+artifacts/
+reports/
 
 # Large model files (if using local LLM models)
 *.bin
@@ -256,3 +289,11 @@ data/uploads/
 *_patched.xml
 *_generated.xml
 *_latest_revision.xml
+# Ad-hoc output from modification_engine when run from repo root
+patched.xml
+
+# Referenced by modules for local samples; often proprietary — keep out of client repos
+test_files/
+
+# HuggingFace / sentence-transformers caches if created under project root
+.cache/
