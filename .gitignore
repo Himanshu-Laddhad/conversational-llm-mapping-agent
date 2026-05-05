@@ -37,6 +37,13 @@ firebase-adminsdk*.json
 # Internal / one-off presentations (add negated patterns if you need a deck in-repo)
 *.pptx
 
+# ── Mermaid sources & internal dev notes (not for client bundles) ────────────
+*.mmd
+*.mermaid
+CHANGES.md
+BUGFIX.md
+DESIGN_DECISIONS.md
+
 # ── IDE & local tool metadata (do not ship to clients) ──────────────────────
 .cursor/
 **/.cursor/
