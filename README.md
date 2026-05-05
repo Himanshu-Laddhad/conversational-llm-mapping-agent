@@ -1,4 +1,4 @@
-# PartnerLinQ — Conversational Mapping Intelligence Agent
+# Conversational Mapping Intelligence Agent
 
 A Streamlit-based AI agent that lets EDI analysts interact with XSLT/EDI mapping files in plain English. Upload a mapping file, ask questions, simulate transformations, modify mappings, audit for issues, or generate new XSLTs — all through a conversational chat interface.
 
