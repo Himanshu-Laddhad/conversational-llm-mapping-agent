@@ -7,7 +7,7 @@
 ![LangChain](https://img.shields.io/badge/Agentic-Tool--Calling-yellow)
 ![ChromaDB](https://img.shields.io/badge/RAG-ChromaDB-purple)
 
-> **Industry practicum project (PartnerLinQ · Spring 2026)** — A production-grade
+> **Industry project** — A production-grade
 > conversational AI agent that reduces EDI/XSLT mapping turnaround from days to
 > minutes. Built with GPT-4.1 tool-calling, RAG retrieval, and real XSLT execution.
 
